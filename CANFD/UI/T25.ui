@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Form</class>
+ <widget class="QWidget" name="Form">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1300</width>
+    <height>456</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <layout class="QHBoxLayout" name="horizontalLayout">
+   <item>
+    <widget class="QFrame" name="frame">
+     <property name="frameShape">
+      <enum>QFrame::StyledPanel</enum>
+     </property>
+     <property name="frameShadow">
+      <enum>QFrame::Raised</enum>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout">
+      <item>
+       <widget class="QFrame" name="frame_2">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_2">
+         <item>
+          <widget class="QLineEdit" name="lineEdit1"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit2"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit3"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit4"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit5"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit6"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit7"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit8"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit9"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit10"/>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QFrame" name="frame_3">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_3">
+         <item>
+          <widget class="QLineEdit" name="lineEdit11"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit12"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit13"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit14"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit15"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit16"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit17"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit18"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit19"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit20"/>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QFrame" name="frame_4">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_4">
+         <item>
+          <widget class="QLineEdit" name="lineEdit21"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit22"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit23"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit24"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit25"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit26"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit27"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit28"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit29"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit30"/>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QFrame" name="frame_5">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::StyledPanel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Raised</enum>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout_5">
+         <item>
+          <widget class="QLineEdit" name="lineEdit31"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit32"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit33"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit34"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit35"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit36"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit37"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit38"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit39"/>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="lineEdit40"/>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

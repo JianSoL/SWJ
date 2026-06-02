@@ -1,0 +1,1 @@
+"""CANFD application package."""
