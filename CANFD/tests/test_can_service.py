@@ -173,6 +173,63 @@ class CanServiceTests(unittest.TestCase):
             brs=True,
         )
 
+    @staticmethod
+    def _history_time(year, month, day, hour, minute, second):
+        return (
+            ((int(year) - 2000) & 0x3F)
+            | ((int(month) & 0x0F) << 6)
+            | ((int(day) & 0x1F) << 10)
+            | ((int(hour) & 0x1F) << 15)
+            | ((int(minute) & 0x3F) << 20)
+            | ((int(second) & 0x3F) << 26)
+        )
+
+    @staticmethod
+    def _cell_voltage_info(voltage, bcu, csu, cell):
+        return (
+            (int(voltage) & 0x3FFF)
+            | ((int(bcu) & 0x3F) << 14)
+            | ((int(csu) & 0x3F) << 20)
+            | ((int(cell) & 0x3F) << 26)
+        )
+
+    @staticmethod
+    def _cell_temperature_position(bcu, csu, cell):
+        return (
+            (int(bcu) & 0x1F)
+            | ((int(csu) & 0x1F) << 5)
+            | ((int(cell) & 0x3F) << 10)
+        )
+
+    def _history_log_payload(self, sequence=7):
+        payload = bytearray(52)
+        payload[0:2] = int(sequence).to_bytes(2, "little")
+        payload[2] = 3
+        payload[3] = 2
+        payload[4:8] = self._history_time(2026, 6, 2, 16, 5, 32).to_bytes(4, "little")
+        payload[8] = 0b00001001
+        payload[9] = 1
+        payload[10:12] = (34).to_bytes(2, "little")
+        alarm_info = (4) | (0 << 7) | (0 << 14) | (3 << 18) | (32 << 24)
+        payload[12:16] = alarm_info.to_bytes(4, "little")
+        payload[16:18] = (3156).to_bytes(2, "little")
+        payload[18:20] = (0).to_bytes(2, "little", signed=True)
+        payload[20:22] = (838).to_bytes(2, "little")
+        payload[22:24] = (1000).to_bytes(2, "little")
+        payload[24:26] = (20000).to_bytes(2, "little")
+        payload[26:28] = (20000).to_bytes(2, "little")
+        payload[28:30] = (181).to_bytes(2, "little")
+        payload[30:32] = (101).to_bytes(2, "little")
+        payload[32:36] = self._cell_voltage_info(3452, 1, 2, 11).to_bytes(4, "little")
+        payload[36:40] = self._cell_voltage_info(3283, 1, 2, 82).to_bytes(4, "little")
+        payload[40:42] = (391).to_bytes(2, "little", signed=True)
+        payload[42:44] = self._cell_temperature_position(1, 2, 11).to_bytes(2, "little")
+        payload[44:46] = (274).to_bytes(2, "little", signed=True)
+        payload[46:48] = self._cell_temperature_position(1, 2, 82).to_bytes(2, "little")
+        payload[48:50] = (2000).to_bytes(2, "little", signed=True)
+        payload[50:52] = (2100).to_bytes(2, "little", signed=True)
+        return bytes(payload)
+
     def test_send_next_query_supports_cluster_zero(self):
         result = self.service.send_next_query(0)
         self.assertEqual(result, 1)
@@ -403,6 +460,61 @@ class CanServiceTests(unittest.TestCase):
                 ("display_level", 29, False),
             ],
         )
+
+    def test_read_history_log_count_uses_diag_command_86(self):
+        self.service.flush_rx_backlog = lambda *args, **kwargs: 0
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1887F2A0,
+                data=bytes([0xFF, 0x01, 0xC0, 0x01, 0, 0, 0, 0]),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+
+        count = self.service.read_history_log_count(1)
+
+        self.assertEqual(count, 448)
+        self.assertEqual(self.driver.sent_can[-1].frame_id, 0x1886A0F2)
+        self.assertEqual(self.driver.sent_can[-1].data[:3], bytes([0x00, 0x00, 0x01]))
+
+    def test_read_history_log_entry_reassembles_chunks_and_decodes_payload(self):
+        self.service.flush_rx_backlog = lambda *args, **kwargs: 0
+        payload = self._history_log_payload(sequence=7)
+        padded = payload.ljust(56, b"\x00")
+        for chunk_index in range(8):
+            self.driver.can_frames.append(
+                RawFrame(
+                    frame_id=0x1887F2A0,
+                    data=(
+                        bytes([chunk_index + 1])
+                        + padded[chunk_index * 7 : (chunk_index + 1) * 7]
+                    ),
+                    is_fd=False,
+                    extern_flag=True,
+                    remote_flag=False,
+                )
+            )
+
+        record = self.service.read_history_log_entry(1, 7)
+
+        self.assertEqual(record.sequence, 7)
+        self.assertEqual(record.timestamp, "2026-06-02 16:05:32")
+        self.assertEqual(record.log_type, "告警日志")
+        self.assertEqual(record.log_subtype, "告警产生")
+        self.assertEqual(record.run_status, 2)
+        self.assertEqual(record.alarm_count, 1)
+        self.assertEqual(record.alarm_id, 32)
+        self.assertEqual(record.alarm_level, 3)
+        self.assertEqual(record.total_voltage, 315.6)
+        self.assertEqual(record.soc, 83.8)
+        self.assertEqual(record.max_cell_voltage, 3452)
+        self.assertEqual(record.max_cell_temperature, 39.1)
+        self.assertEqual(record.threshold_value, 2000)
+        self.assertEqual(record.actual_value, 2100)
+        self.assertEqual(self.driver.sent_can[-1].frame_id, 0x1886A0F2)
+        self.assertEqual(self.driver.sent_can[-1].data[:3], bytes([0x07, 0x00, 0x01]))
 
     def test_write_alarm_parameter_record_encodes_signed_values(self):
         self.driver.canfd_frames.extend(

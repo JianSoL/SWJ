@@ -5,6 +5,7 @@ __pycache__/
 
 build/
 dist/
+distV3/
 
 CANFD/log/
 CANFD/__pycache__/

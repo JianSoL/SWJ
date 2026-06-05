@@ -29,6 +29,7 @@ from UI.T26 import BatteryMonitorBAL
 from UI.T27 import BatteryMonitorTem
 from domain.dbc_runtime import DbcRuntime
 from presentation.alarm_parameter_page import AlarmParameterPage
+from presentation.history_log_page import HistoryLogPage
 from presentation.index_control_page import IndexControlPage
 from presentation.index_monitor_page import IndexMonitorPage
 from presentation.signal_grid_page import SignalGridPage
@@ -51,12 +52,13 @@ class MainWindow(Ui_Form, QWidget):
     REALTIME_MONITOR_TAB_INDEX = 2
     HOST_CONTROL_TAB_INDEX = 3
     ALARM_PARAMETER_TAB_INDEX = 4
-    DBC_TAB_INDEX = 5
-    VOLTAGE_TAB_INDEX = 6
-    TEMPERATURE_TAB_INDEX = 7
-    BALANCE_TAB_INDEX = 8
-    ALARM_TAB_INDEX = 9
-    TERMINAL_TEMPERATURE_TAB_INDEX = 10
+    HISTORY_LOG_TAB_INDEX = 5
+    DBC_TAB_INDEX = 6
+    VOLTAGE_TAB_INDEX = 7
+    TEMPERATURE_TAB_INDEX = 8
+    BALANCE_TAB_INDEX = 9
+    ALARM_TAB_INDEX = 10
+    TERMINAL_TEMPERATURE_TAB_INDEX = 11
 
     PERIODIC_TAB_INDEXES = (
         VOLTAGE_TAB_INDEX,
@@ -207,6 +209,7 @@ class MainWindow(Ui_Form, QWidget):
         self._create_index_monitor_page()
         self._create_index_control_page()
         self._create_alarm_parameter_page()
+        self._create_history_log_page()
         self._create_dbc_page()
         self._create_periodic_pages()
         self.periodic_tab_refreshers = {
@@ -442,6 +445,16 @@ class MainWindow(Ui_Form, QWidget):
         )
         self.tabWidget.addTab(self.alarm_parameter_page, "\u544a\u8b66\u53c2\u6570")
 
+    def _create_history_log_page(self):
+        self.history_log_page = HistoryLogPage()
+        self.history_log_page.set_cluster_context(
+            self.selected_cluster_index,
+            self.selected_address,
+        )
+        self._style_data_table(self.history_log_page.table)
+        self.history_log_page.table.horizontalHeader().setStretchLastSection(False)
+        self.tabWidget.addTab(self.history_log_page, "\u5386\u53f2\u65e5\u5fd7")
+
     def _create_index_monitor_page(self):
         self.index_monitor_page = IndexMonitorPage()
         self.index_monitor_page.set_cluster_context(
@@ -559,6 +572,21 @@ class MainWindow(Ui_Form, QWidget):
         )
         self.alarm_parameter_page.alarm_table.itemSelectionChanged.connect(
             self.on_alarm_parameter_selection_changed
+        )
+        self.history_log_page.read_button.clicked.connect(
+            self.on_history_log_read
+        )
+        self.history_log_page.stop_button.clicked.connect(
+            self.on_history_log_stop
+        )
+        self.history_log_page.save_button.clicked.connect(
+            self.on_history_log_save
+        )
+        self.history_log_page.clear_table_button.clicked.connect(
+            self.on_history_log_clear_table
+        )
+        self.history_log_page.clear_device_button.clicked.connect(
+            self.on_history_log_clear_device
         )
         self.index_control_page.read_indexes_button.clicked.connect(
             self.on_index_control_read_indexes
@@ -963,6 +991,10 @@ class MainWindow(Ui_Form, QWidget):
             self.selected_cluster_index,
             self.selected_address,
         )
+        self.history_log_page.set_cluster_context(
+            self.selected_cluster_index,
+            self.selected_address,
+        )
         self.alarm_parameter_page.clear_cached_values()
         self.alarm_parameter_page.set_status_text(
             self.alarm_parameter_page.default_status_text()
@@ -1188,6 +1220,146 @@ class MainWindow(Ui_Form, QWidget):
                 "\u544a\u8b66\u53c2\u6570\u5df2\u4fdd\u5b58\u5230 FLASH\u3002"
             )
         )
+
+    def _ensure_history_log_ready(self):
+        if not self.can_ready:
+            QMessageBox.warning(
+                self,
+                "CANFD 未连接",
+                "CANFD 未连接，无法读取历史日志。",
+            )
+            return False
+        if self.selected_cluster_index is None:
+            QMessageBox.warning(
+                self,
+                "未选择簇",
+                "当前没有可用的簇。",
+            )
+            return False
+        return True
+
+    def on_history_log_read(self):
+        if not self._ensure_history_log_ready():
+            return
+
+        log_type = self.history_log_page.selected_log_type()
+        self.history_log_stop_requested = False
+        self.history_log_page.clear_records()
+        self.history_log_page.set_reading(True)
+        self.history_log_page.set_status("正在读取日志总数...")
+
+        read_count = 0
+        error_count = 0
+        total_count = 0
+        try:
+            with self._bus_command_busy_state():
+                total_count = self.service.read_history_log_count(
+                    self.selected_cluster_index,
+                    log_type=log_type,
+                )
+                self.history_log_page.set_counts(total_count, 0)
+                if total_count <= 0:
+                    self.history_log_page.set_status("设备暂无历史日志")
+                    return
+
+                for log_index in range(total_count, 0, -1):
+                    if self.history_log_stop_requested:
+                        self.history_log_page.set_status(
+                            f"已停止，成功读取 {read_count} 条，失败 {error_count} 条"
+                        )
+                        break
+                    self.history_log_page.set_status(
+                        f"正在读取第 {log_index} 条..."
+                    )
+                    QApplication.processEvents()
+                    try:
+                        record = self.service.read_history_log_entry(
+                            self.selected_cluster_index,
+                            log_index,
+                            log_type=log_type,
+                        )
+                    except Exception:
+                        error_count += 1
+                        self.history_log_page.set_counts(total_count, read_count)
+                        QApplication.processEvents()
+                        continue
+
+                    read_count += 1
+                    self.history_log_page.append_record(record)
+                    self.history_log_page.set_counts(total_count, read_count)
+                    QApplication.processEvents()
+
+                if not self.history_log_stop_requested:
+                    self.history_log_page.set_status(
+                        f"日志读取正常，成功 {read_count} 条，失败 {error_count} 条"
+                    )
+        except Exception as exc:
+            self.history_log_page.set_status(f"读取失败: {exc}", failed=True)
+            QMessageBox.critical(
+                self,
+                "读取历史日志失败",
+                str(exc),
+            )
+        finally:
+            self.history_log_page.set_reading(False)
+            self.history_log_stop_requested = False
+
+    def on_history_log_stop(self):
+        self.history_log_stop_requested = True
+        self.history_log_page.set_status("正在停止读取...")
+
+    def on_history_log_save(self):
+        if not self.history_log_page.records:
+            QMessageBox.information(
+                self,
+                "没有可保存的日志",
+                "当前表格没有历史日志数据。",
+            )
+            return
+        path = self.history_log_page.choose_save_path()
+        if not path:
+            return
+        try:
+            self.history_log_page.save_records_to_csv(path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "保存历史日志失败",
+                str(exc),
+            )
+            return
+        self.history_log_page.set_status(f"日志已保存: {path}")
+
+    def on_history_log_clear_table(self):
+        self.history_log_page.clear_records()
+
+    def on_history_log_clear_device(self):
+        if not self._ensure_index_action_ready(require_factory_mode=True):
+            return
+        reply = QMessageBox.question(
+            self,
+            "清空历史日志",
+            (
+                f"确认清空簇{self.selected_cluster_index} ({self.selected_address}) "
+                "设备中的历史日志？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            with self._bus_command_busy_state():
+                self.service.clear_history_logs(self.selected_cluster_index)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "清空历史日志失败",
+                str(exc),
+            )
+            return
+        self.history_log_page.clear_records()
+        self.history_log_page.set_status("设备历史日志已清空")
 
     def _ensure_index_action_ready(self, require_factory_mode=False):
         if not self.can_ready:
@@ -1957,6 +2129,7 @@ class MainWindow(Ui_Form, QWidget):
         self.idle_poll_count = 0
         self.request_query_cluster_cursor = 0
         self.balance_query_cluster_cursor = 0
+        self.history_log_stop_requested = False
         self.factory_mode_status_value = None
         self.factory_mode_status_text = "\u672a\u77e5"
 

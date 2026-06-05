@@ -18,6 +18,7 @@ from domain.models import (
     AlarmParameterField,
     AlarmParameterRecord,
     BusConfig,
+    HistoryLogRecord,
     LegacySignalUpdate,
     PeriodicSignalUpdate,
     PollResult,
@@ -58,6 +59,9 @@ class FakeService:
         self.alarm_record_calls = []
         self.alarm_write_calls = []
         self.alarm_save_flash_calls = []
+        self.history_count_calls = []
+        self.history_entry_calls = []
+        self.history_clear_calls = []
         self.dbc_runtime_updates = []
         self.bus_config = BusConfig(
             can_type=41,
@@ -351,6 +355,49 @@ class FakeService:
         self.alarm_save_flash_calls.append(cluster_index)
         return True
 
+    def read_history_log_count(self, cluster_index, log_type=1):
+        self.history_count_calls.append((cluster_index, log_type))
+        return 2
+
+    def read_history_log_entry(self, cluster_index, log_index, log_type=1):
+        self.history_entry_calls.append((cluster_index, log_index, log_type))
+        return HistoryLogRecord(
+            sequence=log_index,
+            timestamp=f"2026-06-02 10:00:0{log_index}",
+            log_type="告警日志",
+            log_subtype="告警产生",
+            run_status=2,
+            relay_status="1继电器闭合",
+            alarm_count=1,
+            raw_word=0,
+            alarm_id=32,
+            alarm_name="高压互锁故障",
+            alarm_level=3,
+            alarm_position="BCU: 000---CSU: 000---Cell: 004---Bat: 0",
+            total_voltage=315.6,
+            total_current=0.0,
+            soc=83.8,
+            soh=100.0,
+            p_bus_resistance=20000,
+            n_bus_resistance=20000,
+            diff_voltage=0,
+            diff_temperature=0.0,
+            max_cell_voltage=3450,
+            max_cell_voltage_position="BCU:000|CSU:000|Cell:004",
+            min_cell_voltage=3300,
+            min_cell_voltage_position="BCU:000|CSU:000|Cell:005",
+            max_cell_temperature=30.0,
+            max_cell_temperature_position="BCU:000|CSU:000|Cell:004",
+            min_cell_temperature=25.0,
+            min_cell_temperature_position="BCU:000|CSU:000|Cell:005",
+            threshold_value=2000,
+            actual_value=2100,
+        )
+
+    def clear_history_logs(self, cluster_index):
+        self.history_clear_calls.append(cluster_index)
+        return True
+
     def get_periodic_voltage_values(self, address):
         return self.periodic_voltage[address]
 
@@ -378,7 +425,7 @@ class MainWindowTests(unittest.TestCase):
         service = FakeService()
         window = MainWindow(service, runtime_config)
         self.assertTrue(window.can_ready)
-        self.assertEqual(window.tabWidget.count(), 11)
+        self.assertEqual(window.tabWidget.count(), 12)
         self.assertEqual(window.cluster_selector.count(), 3)
         self.assertEqual(window.cluster_selector.currentIndex(), 1)
         self.assertEqual(window.selected_cluster_index, 1)
@@ -797,6 +844,44 @@ class MainWindowTests(unittest.TestCase):
 
         window.on_alarm_parameter_save_flash()
         self.assertEqual(service.alarm_save_flash_calls, [0])
+
+        window.close()
+
+    def test_history_log_page_reads_latest_records_for_selected_cluster(self):
+        runtime_config = {"BCU_NUM": 2, "SAVE_INTERVAL_MS": 500}
+        service = FakeService()
+        window = MainWindow(service, runtime_config)
+        window.cluster_selector.setCurrentIndex(2)
+
+        window.on_history_log_read()
+
+        self.assertEqual(service.history_count_calls, [(2, 1)])
+        self.assertEqual(
+            service.history_entry_calls,
+            [(2, 2, 1), (2, 1, 1)],
+        )
+        self.assertEqual(window.history_log_page.table.rowCount(), 2)
+        self.assertEqual(window.history_log_page.table.item(0, 0).text(), "2")
+        self.assertEqual(window.history_log_page.table.item(0, 8).text(), "高压互锁故障")
+        self.assertIn("成功 2 条", window.history_log_page.status_edit.text())
+
+        window.close()
+
+    def test_history_log_page_can_clear_device_logs(self):
+        runtime_config = {"BCU_NUM": 2, "SAVE_INTERVAL_MS": 500}
+        service = FakeService()
+        window = MainWindow(service, runtime_config)
+        window._set_factory_mode_status(1)
+
+        with patch(
+            "presentation.main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            window.on_history_log_clear_device()
+
+        self.assertEqual(service.history_clear_calls, [window.selected_cluster_index])
+        self.assertEqual(window.history_log_page.table.rowCount(), 0)
+        self.assertIn("已清空", window.history_log_page.status_edit.text())
 
         window.close()
 

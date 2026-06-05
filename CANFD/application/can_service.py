@@ -8,6 +8,7 @@ from domain.models import (
     AlarmParameterDefinition,
     AlarmParameterField,
     AlarmParameterRecord,
+    HistoryLogRecord,
     LegacySignalUpdate,
     PeriodicSignalUpdate,
     PollResult,
@@ -24,6 +25,8 @@ CMD_READ_VAR = 0x80
 RESP_READ_VAR = 0x81
 CMD_WRITE_VAR = 0x82
 RESP_WRITE_VAR = 0x83
+CMD_READ_LOG = 0x86
+RESP_READ_LOG = 0x87
 CMD_CTRL_HARDWARE = 0x88
 RESP_CTRL_HARDWARE = 0x89
 CMD_SET_TIME = 0x90
@@ -36,7 +39,13 @@ CTRL_PARA_CONFIG = 0x04
 CTRL_PARA_CONFIG_RESET_FACTORY = 2
 CTRL_PARA_CONFIG_RESET_RUN = 3
 CTRL_PARA_CONFIG_RESET_PRODUCT_INFO = 5
+CTRL_PARA_CONFIG_CLEAR_HISTORY_LOG = 6
 CTRL_PARA_CONFIG_SAVE_ALL_TO_FLASH = 8
+HISTORY_LOG_TYPE_ALARM = 1
+HISTORY_LOG_TYPE_OTHER = 2
+HISTORY_LOG_PAYLOAD_SIZE = 52
+HISTORY_LOG_CHUNK_SIZE = 7
+HISTORY_LOG_CHUNK_COUNT = 8
 VAR_SYS_WORK_MODE = 11
 VAR_SYS_RUN_STATUS = 12
 VAR_SYS_SOC = 16
@@ -1286,6 +1295,294 @@ class CanApplicationService:
                 "Save parameters to FLASH was rejected; confirm factory mode is enabled and wait 5 seconds before retrying"
             )
         return True
+
+    def read_history_log_count(self, cluster_index, log_type=HISTORY_LOG_TYPE_ALARM, timeout_s=1.5, retries=1):
+        if not self.is_open:
+            raise RuntimeError("CANFD not connected")
+        if cluster_index not in self.cluster_index_to_address:
+            raise RuntimeError(f"Invalid cluster index: {cluster_index}")
+
+        log_type = int(log_type) & 0xFF
+        expected_response_id = self._build_response_frame_id(RESP_READ_LOG, cluster_index)
+        payload = b"\x00\x00" + bytes((log_type,)) + b"\x00\x00\x00\x00\x00"
+        attempt_count = max(int(retries), 0) + 1
+        for attempt_index in range(attempt_count):
+            self._prepare_diag_exchange(
+                cluster_index,
+                aggressive=self._is_downstream_cluster(cluster_index),
+            )
+            result = self._send_diag_request(
+                "history_log_count",
+                cluster_index,
+                CMD_READ_LOG,
+                payload,
+            )
+            if result <= 0:
+                raise RuntimeError("Read history log count request send failed")
+
+            response = self._wait_for_can_frame(
+                expected_response_id,
+                lambda frame: (
+                    frame.data_len >= 4
+                    and frame.data[0] == 0xFF
+                    and frame.data[1] == log_type
+                ),
+                timeout_s,
+                "history_log_count_response",
+            )
+            if response is not None:
+                return int.from_bytes(response.data[2:4], byteorder="little", signed=False)
+            if attempt_index + 1 < attempt_count:
+                time.sleep(0.03)
+        raise RuntimeError("Read history log count response timed out")
+
+    def read_history_log_entry(self, cluster_index, log_index, log_type=HISTORY_LOG_TYPE_ALARM, timeout_s=2.0, retries=1):
+        if not self.is_open:
+            raise RuntimeError("CANFD not connected")
+        if cluster_index not in self.cluster_index_to_address:
+            raise RuntimeError(f"Invalid cluster index: {cluster_index}")
+        log_index = int(log_index)
+        if log_index <= 0:
+            raise RuntimeError(f"Invalid history log index: {log_index}")
+
+        log_type = int(log_type) & 0xFF
+        payload = (
+            (log_index & 0xFFFF).to_bytes(2, byteorder="little", signed=False)
+            + bytes((log_type,))
+            + b"\x00\x00\x00\x00\x00"
+        )
+        expected_response_id = self._build_response_frame_id(RESP_READ_LOG, cluster_index)
+        attempt_count = max(int(retries), 0) + 1
+        last_error = None
+        for attempt_index in range(attempt_count):
+            self._prepare_diag_exchange(
+                cluster_index,
+                aggressive=self._is_downstream_cluster(cluster_index),
+            )
+            result = self._send_diag_request(
+                "history_log_entry",
+                cluster_index,
+                CMD_READ_LOG,
+                payload,
+            )
+            if result <= 0:
+                raise RuntimeError("Read history log request send failed")
+
+            try:
+                payload_bytes = self._collect_history_log_payload(
+                    expected_response_id,
+                    timeout_s,
+                )
+                return self.decode_history_log_payload(payload_bytes)
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt_index + 1 < attempt_count:
+                    time.sleep(0.03)
+                    continue
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Read history log response timed out")
+
+    def _collect_history_log_payload(self, expected_response_id, timeout_s):
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        chunks = {}
+        while len(chunks) < HISTORY_LOG_CHUNK_COUNT and time.monotonic() <= deadline:
+            remaining_s = max(deadline - time.monotonic(), 0.0)
+            response = self._wait_for_can_frame(
+                expected_response_id,
+                lambda frame: (
+                    frame.data_len >= 1
+                    and (
+                        frame.data[0] == 0xFE
+                        or 1 <= frame.data[0] <= HISTORY_LOG_CHUNK_COUNT
+                    )
+                ),
+                remaining_s,
+                "history_log_entry_response",
+            )
+            if response is None:
+                break
+            chunk_index = response.data[0]
+            if chunk_index == 0xFE:
+                raise RuntimeError("History log entry was rejected")
+            chunks[chunk_index] = response.data[1:8].ljust(HISTORY_LOG_CHUNK_SIZE, b"\x00")
+
+        if len(chunks) < HISTORY_LOG_CHUNK_COUNT:
+            missing = [
+                str(index)
+                for index in range(1, HISTORY_LOG_CHUNK_COUNT + 1)
+                if index not in chunks
+            ]
+            raise RuntimeError(
+                "Read history log response timed out"
+                + (f" (missing chunks: {', '.join(missing)})" if missing else "")
+            )
+        return b"".join(
+            chunks[index]
+            for index in range(1, HISTORY_LOG_CHUNK_COUNT + 1)
+        )[:HISTORY_LOG_PAYLOAD_SIZE]
+
+    def clear_history_logs(self, cluster_index, timeout_s=1.0):
+        return self._execute_control_command(
+            cluster_index,
+            CTRL_PARA_CONFIG,
+            para2=CTRL_PARA_CONFIG_CLEAR_HISTORY_LOG,
+            timeout_s=timeout_s,
+            action_name="Clear history logs",
+        )
+
+    def decode_history_log_payload(self, payload):
+        payload = bytes(payload)
+        if len(payload) < HISTORY_LOG_PAYLOAD_SIZE:
+            raise RuntimeError(
+                f"History log payload too short: {len(payload)} < {HISTORY_LOG_PAYLOAD_SIZE}"
+            )
+
+        sequence = self._u16(payload, 0)
+        subtype = payload[2]
+        run_status = payload[3]
+        time_text = self._decode_history_time(self._u32(payload, 4))
+        relay_byte = payload[8]
+        alarm_count = payload[9]
+        raw_word = self._u16(payload, 10)
+        alarm_info = self._u32(payload, 12)
+        alarm_id = (alarm_info >> 24) & 0x3F
+        alarm_level = (alarm_info >> 18) & 0x3F
+        alarm_position = self._decode_history_alarm_position(alarm_info)
+        max_cell_voltage, max_cell_voltage_position = self._decode_log_cell_voltage_info(
+            self._u32(payload, 32)
+        )
+        min_cell_voltage, min_cell_voltage_position = self._decode_log_cell_voltage_info(
+            self._u32(payload, 36)
+        )
+        max_cell_temperature, max_cell_temperature_position = self._decode_log_cell_temperature_info(
+            payload,
+            40,
+        )
+        min_cell_temperature, min_cell_temperature_position = self._decode_log_cell_temperature_info(
+            payload,
+            44,
+        )
+
+        return HistoryLogRecord(
+            sequence=sequence,
+            timestamp=time_text,
+            log_type="告警日志",
+            log_subtype=self._history_log_subtype_text(subtype),
+            run_status=run_status,
+            relay_status=self._decode_relay_status(relay_byte),
+            alarm_count=alarm_count,
+            raw_word=raw_word,
+            alarm_id=alarm_id,
+            alarm_name=self._history_log_alarm_name(alarm_id),
+            alarm_level=alarm_level,
+            alarm_position=alarm_position,
+            total_voltage=self._u16(payload, 16) / 10.0,
+            total_current=self._s16(payload, 18) / 10.0,
+            soc=self._u16(payload, 20) / 10.0,
+            soh=self._u16(payload, 22) / 10.0,
+            p_bus_resistance=self._u16(payload, 24),
+            n_bus_resistance=self._u16(payload, 26),
+            diff_voltage=self._u16(payload, 28),
+            diff_temperature=self._u16(payload, 30) / 10.0,
+            max_cell_voltage=max_cell_voltage,
+            max_cell_voltage_position=max_cell_voltage_position,
+            min_cell_voltage=min_cell_voltage,
+            min_cell_voltage_position=min_cell_voltage_position,
+            max_cell_temperature=max_cell_temperature,
+            max_cell_temperature_position=max_cell_temperature_position,
+            min_cell_temperature=min_cell_temperature,
+            min_cell_temperature_position=min_cell_temperature_position,
+            threshold_value=self._s16(payload, 48),
+            actual_value=self._s16(payload, 50),
+            raw_payload=payload[:HISTORY_LOG_PAYLOAD_SIZE],
+        )
+
+    @staticmethod
+    def _u16(payload, offset):
+        return int.from_bytes(payload[offset:offset + 2], byteorder="little", signed=False)
+
+    @staticmethod
+    def _s16(payload, offset):
+        return int.from_bytes(payload[offset:offset + 2], byteorder="little", signed=True)
+
+    @staticmethod
+    def _u32(payload, offset):
+        return int.from_bytes(payload[offset:offset + 4], byteorder="little", signed=False)
+
+    @staticmethod
+    def _decode_history_time(raw_time):
+        year = 2000 + (raw_time & 0x3F)
+        month = (raw_time >> 6) & 0x0F
+        day = (raw_time >> 10) & 0x1F
+        hour = (raw_time >> 15) & 0x1F
+        minute = (raw_time >> 20) & 0x3F
+        second = (raw_time >> 26) & 0x3F
+        if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59 and second <= 59):
+            return "--"
+        return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+
+    @staticmethod
+    def _decode_relay_status(relay_byte):
+        active_relays = [
+            f"{index}继电器闭合"
+            for index in range(1, 9)
+            if relay_byte & (1 << (index - 1))
+        ]
+        return "，".join(active_relays) if active_relays else "0"
+
+    @staticmethod
+    def _history_log_subtype_text(subtype):
+        subtype_text = {
+            3: "告警产生",
+            4: "告警消失",
+            8: "清空历史事件日志",
+            9: "清空实时数据日志",
+            10: "保存参数到FLASH",
+            11: "保存校准系数",
+            12: "设置时间",
+            13: "PAR类索引修改",
+        }
+        return subtype_text.get(int(subtype), f"子类型{subtype}")
+
+    @staticmethod
+    def _decode_history_alarm_position(alarm_info):
+        cell_no = alarm_info & 0x7F
+        bsu_no = (alarm_info >> 7) & 0x7F
+        equip_type = (alarm_info >> 14) & 0x0F
+        bat_no = (alarm_info >> 31) & 0x01
+        return f"BCU: {equip_type:03d}---CSU: {bsu_no:03d}---Cell: {cell_no:03d}---Bat: {bat_no}"
+
+    @staticmethod
+    def _decode_log_cell_voltage_info(raw_value):
+        cell_voltage = raw_value & 0x3FFF
+        bcu_no = (raw_value >> 14) & 0x3F
+        csu_no = (raw_value >> 20) & 0x3F
+        cell_no = (raw_value >> 26) & 0x3F
+        return cell_voltage, f"BCU:{bcu_no:03d}|CSU:{csu_no:03d}|Cell:{cell_no:03d}"
+
+    @classmethod
+    def _decode_log_cell_temperature_info(cls, payload, offset):
+        cell_temperature = cls._s16(payload, offset) / 10.0
+        position = cls._u16(payload, offset + 2)
+        bcu_no = position & 0x1F
+        csu_no = (position >> 5) & 0x1F
+        cell_no = (position >> 10) & 0x3F
+        return cell_temperature, f"BCU:{bcu_no:03d}|CSU:{csu_no:03d}|Cell:{cell_no:03d}"
+
+    def _history_log_alarm_name(self, alarm_id):
+        code = f"{int(alarm_id):03d}"
+        if int(alarm_id) <= 0:
+            return "-"
+        if code in self.alarm_display_names:
+            return self.alarm_display_names[code]
+        for definition in self.alarm_parameter_definitions:
+            if definition.code == code or definition.alarm_id == int(alarm_id) - 1:
+                return definition.name
+        if int(alarm_id) - 1 < len(ALARM_PARAMETER_NAMES):
+            return ALARM_PARAMETER_NAMES[int(alarm_id) - 1]
+        return f"告警{code}"
 
     def control_channel(self, cluster_index, channel_id, enabled, timeout_s=1.0):
         return self._execute_control_command(

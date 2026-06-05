@@ -100,3 +100,38 @@ class AlarmParameterRecord:
     name: str
     values: Dict[str, int] = field(default_factory=dict)
     is_complete: bool = True
+
+
+@dataclass
+class HistoryLogRecord:
+    sequence: int
+    timestamp: str
+    log_type: str
+    log_subtype: str
+    run_status: int
+    relay_status: str
+    alarm_count: int
+    raw_word: int
+    alarm_id: int
+    alarm_name: str
+    alarm_level: int
+    alarm_position: str
+    total_voltage: float
+    total_current: float
+    soc: float
+    soh: float
+    p_bus_resistance: int
+    n_bus_resistance: int
+    diff_voltage: int
+    diff_temperature: float
+    max_cell_voltage: int
+    max_cell_voltage_position: str
+    min_cell_voltage: int
+    min_cell_voltage_position: str
+    max_cell_temperature: float
+    max_cell_temperature_position: str
+    min_cell_temperature: float
+    min_cell_temperature_position: str
+    threshold_value: int
+    actual_value: int
+    raw_payload: bytes = b""
