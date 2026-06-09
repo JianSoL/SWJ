@@ -1,0 +1,1 @@
+pyinstaller --paths P:\Anconda\envs\QT\Lib\site-packages\PyQt6\Qt6\bin -F -w --icon=1.ico t12.py
