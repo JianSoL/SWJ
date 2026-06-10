@@ -3,7 +3,7 @@ from datetime import datetime
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QTimer, QDateTime
 from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QMessageBox,QLabel,QSpinBox,QPushButton,QCheckBox
+from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QMessageBox,QLabel,QSpinBox,QPushButton,QCheckBox,QComboBox
 import sys
 import time
 import threading
@@ -140,6 +140,8 @@ def load_can_board_config(file_name="config.json"):
 
 
 class Edit(Ui_Form, QWidget):
+    DEFAULT_CLUSTER_ADDRESS = "A0"
+
     # 定义初始化进程
     def __init__(self):
         # 继承
@@ -174,6 +176,29 @@ class Edit(Ui_Form, QWidget):
             return
         if not hasattr(self, "product_command_layout"):
             return
+
+        self.cluster_options = self._build_cluster_options()
+        self._add_command_caption("当前簇")
+        self.cluster_selector = QComboBox(self.product_command_bar)
+        self.cluster_selector.setMinimumWidth(130)
+        for cluster_index, address in self.cluster_options:
+            self.cluster_selector.addItem(
+                self._cluster_display_name(cluster_index, address),
+                cluster_index,
+            )
+        if self.cluster_options:
+            default_option_index = self._default_cluster_option_index()
+            self.cluster_selector.setCurrentIndex(default_option_index)
+            self.selected_cluster_index, self.selected_cluster_address = self.cluster_options[
+                default_option_index
+            ]
+        else:
+            self.selected_cluster_index = 0
+            self.selected_cluster_address = ""
+            self.cluster_selector.setEnabled(False)
+        self.cluster_selector.currentIndexChanged.connect(self.on_cluster_selector_changed)
+        self.product_command_layout.addWidget(self.cluster_selector)
+        self.product_command_layout.addSpacing(8)
 
         self._add_command_caption("设备")
         self.device_index_spinbox = QSpinBox(self.product_command_bar)
@@ -212,6 +237,187 @@ class Edit(Ui_Form, QWidget):
         self.product_command_layout.addWidget(self.frame_status_label)
 
         self._product_controls_ready = True
+
+
+    def _build_cluster_options(self):
+        addresses = list(config.get("ADDRESLIST", []))
+        max_cluster_index = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
+        options = []
+        if addresses:
+            options.append((0, str(addresses[0]).upper()))
+        for cluster_index in range(1, max_cluster_index + 1):
+            options.append((cluster_index, str(addresses[cluster_index]).upper()))
+        return options
+
+
+    def _default_cluster_option_index(self):
+        for option_index, (_cluster_index, address) in enumerate(getattr(self, "cluster_options", [])):
+            if str(address).upper() == self.DEFAULT_CLUSTER_ADDRESS:
+                return option_index
+        return 0
+
+
+    def _cluster_address(self, cluster_index):
+        addresses = config.get("ADDRESLIST", [])
+        if 0 <= cluster_index < len(addresses):
+            return str(addresses[cluster_index]).upper()
+        return ""
+
+
+    def _cluster_display_name(self, cluster_index, address=None):
+        address = self._cluster_address(cluster_index) if address is None else str(address).upper()
+        if cluster_index == 0:
+            return f"00 ({address})" if address else "00"
+        return f"簇{cluster_index} ({address})" if address else f"簇{cluster_index}"
+
+
+    def _valid_cluster_indices(self):
+        return {cluster_index for cluster_index, _address in getattr(self, "cluster_options", [])}
+
+
+    def _set_combo_index_safely(self, combo, index):
+        if combo is None or index < 0 or index >= combo.count():
+            return False
+        previous_block = combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(previous_block)
+        return True
+
+
+    def _sync_cluster_selector_from_index(self, cluster_index):
+        selector = getattr(self, "cluster_selector", None)
+        if selector is None:
+            return
+        for option_index in range(selector.count()):
+            if selector.itemData(option_index) == cluster_index:
+                self._set_combo_index_safely(selector, option_index)
+                return
+
+
+    def _cluster_page_combo_boxes(self):
+        combo_specs = (
+            ("S18", "comboBox"),
+            ("S19", "comboBox"),
+            ("S20", "comboBox"),
+            ("S21", "comboBox"),
+            ("S22", "comboBox"),
+            ("S23", "comboBox"),
+            ("S24", "comboBox"),
+            ("S17", "comboBox_13"),
+        )
+        combos = []
+        for page_name, combo_name in combo_specs:
+            page = getattr(self, page_name, None)
+            combo = getattr(page, combo_name, None)
+            if combo is not None:
+                combos.append(combo)
+        return combos
+
+
+    def _sync_page_cluster_combo_boxes(self, cluster_index):
+        for combo in self._cluster_page_combo_boxes():
+            self._set_combo_index_safely(combo, cluster_index)
+
+
+    def _connect_cluster_page_selectors(self):
+        combo_specs = (
+            ("S18", "comboBox"),
+            ("S19", "comboBox"),
+            ("S20", "comboBox"),
+            ("S22", "comboBox"),
+            ("S23", "comboBox"),
+            ("S24", "comboBox"),
+            ("S17", "comboBox_13"),
+        )
+        for page_name, combo_name in combo_specs:
+            page = getattr(self, page_name, None)
+            combo = getattr(page, combo_name, None)
+            if combo is not None:
+                combo.currentIndexChanged.connect(self.on_embedded_cluster_changed)
+
+
+    def _reset_cluster_query_cursors(self):
+        for attr_name in (
+            "BAL_index",
+            "DXYC_index",
+            "BCUSignalQ_index",
+            "BCUSignalQ_DXYC_index",
+            "current_COUNT",
+        ):
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, 0)
+
+
+    def _clear_cluster_buffers(self):
+        global Vres, VresBAL, VresTem, VresDXYC, Alarm_list
+        Vres = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_NUM"])))]
+        VresBAL = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_NUM"])))]
+        VresTem = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_Tem_NUM"])))]
+        VresDXYC = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_NUM"])))]
+        Alarm_list = [[0 for _ in range(32)] for _ in range(64)]
+
+
+    def _refresh_cluster_views(self, source=None):
+        self._clear_cluster_buffers()
+        self.S18currentIndexChanged()
+        self.S18currentIndexChangedBAL()
+        self.S20currentIndexChangedTem()
+        if getattr(self, "table_index", None) == config["BCU_NUM"] + 6 and source != "alarm_page":
+            self.S21.clear_cached_values()
+            self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
+            if getattr(self, "can_ready", False):
+                self.on_alarm_parameter_read()
+
+
+    def _set_active_cluster(self, cluster_index, refresh=True, source=None):
+        if getattr(self, "_cluster_syncing", False):
+            return
+        try:
+            cluster_index = int(cluster_index)
+        except (TypeError, ValueError):
+            return
+        if cluster_index not in self._valid_cluster_indices():
+            return
+
+        self._cluster_syncing = True
+        try:
+            previous_index = getattr(self, "selected_cluster_index", None)
+            self.selected_cluster_index = cluster_index
+            self.selected_cluster_address = self._cluster_address(cluster_index)
+            self._sync_cluster_selector_from_index(cluster_index)
+            self._sync_page_cluster_combo_boxes(cluster_index)
+            if hasattr(self, "S21"):
+                self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
+
+            if (
+                source in ("top", "init")
+                and hasattr(self, "tabWidget")
+                and getattr(self, "table_index", 0) <= config["BCU_NUM"]
+                and cluster_index <= config["BCU_NUM"]
+            ):
+                self.tabWidget.setCurrentIndex(cluster_index)
+                self.table_index = cluster_index
+
+            if previous_index != cluster_index:
+                self._reset_cluster_query_cursors()
+                if refresh:
+                    self._refresh_cluster_views(source=source)
+        finally:
+            self._cluster_syncing = False
+
+
+    def on_cluster_selector_changed(self, option_index):
+        selector = getattr(self, "cluster_selector", None)
+        if selector is None or option_index < 0:
+            return
+        cluster_index = selector.itemData(option_index)
+        if cluster_index is None:
+            cluster_index = option_index
+        self._set_active_cluster(cluster_index, refresh=True, source="top")
+
+
+    def on_embedded_cluster_changed(self, cluster_index):
+        self._set_active_cluster(cluster_index, refresh=True, source="embedded")
 
 
     def _load_bus_config_controls(self, can_config):
@@ -368,6 +574,7 @@ class Edit(Ui_Form, QWidget):
         self.can_ready = False
         self.rx_frame_count = 0
         self.c = None
+        self._cluster_syncing = False
         self._setup_product_controls()
         self._load_bus_config_controls(load_can_board_config())
         self._set_bus_status(False, "CAN: 未连接", "warning")
@@ -424,6 +631,7 @@ class Edit(Ui_Form, QWidget):
         self.S18.comboBox.currentIndexChanged.connect(self.S18currentIndexChanged)
         self.S19.comboBox.currentIndexChanged.connect(self.S18currentIndexChangedBAL)
         self.S20.comboBox.currentIndexChanged.connect(self.S20currentIndexChangedTem)
+        self._connect_cluster_page_selectors()
 
 
         #BAU通道控制
@@ -471,6 +679,11 @@ class Edit(Ui_Form, QWidget):
 
 
         self.table_index = 1
+        self._set_active_cluster(
+            getattr(self, "selected_cluster_index", self._default_cluster_option_index()),
+            refresh=False,
+            source="init",
+        )
 
 
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
@@ -544,6 +757,10 @@ class Edit(Ui_Form, QWidget):
         # 触发的函数：根据选中的标签页输出信息
         print(f"当前选中的标签页索引: {index}")
         self.table_index = index
+        if index <= config["BCU_NUM"]:
+            self._set_active_cluster(index, refresh=False, source="tab")
+        else:
+            self._sync_page_cluster_combo_boxes(getattr(self, "selected_cluster_index", 0))
 
 
 
@@ -1676,7 +1893,8 @@ class Edit(Ui_Form, QWidget):
 
 
 
-    def on_alarm_cluster_changed(self):
+    def on_alarm_cluster_changed(self, *_args):
+        self._set_active_cluster(self.S21.comboBox.currentIndex(), refresh=False, source="alarm_page")
         self.S21.set_cluster_context()
         self.S21.clear_cached_values()
         self.on_alarm_parameter_read()
