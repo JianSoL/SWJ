@@ -93,21 +93,61 @@ class Ui_Form(object):
             }
         """)
 
-        self.tabWidget.setFixedSize(1920, 1000)  # 设置固定尺寸
+        self.tabWidget.setMinimumSize(0, 0)
+        self.tabWidget.setMaximumSize(16777215, 16777215)
+        self.tabWidget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.tabWidget.setDocumentMode(True)
+        self.tabWidget.setUsesScrollButtons(True)
+        self.tabWidget.tabBar().setExpanding(False)
+
+        self.product_header = QtWidgets.QFrame(parent=Form)
+        self.product_header.setObjectName("productHeader")
+        self.product_header_layout = QHBoxLayout(self.product_header)
+        self.product_header_layout.setContentsMargins(24, 10, 24, 10)
+        self.product_header_layout.setSpacing(18)
+
+        self.product_brand_block = QtWidgets.QWidget(parent=self.product_header)
+        self.product_brand_block.setObjectName("productBrandBlock")
+        self.product_brand_layout = QVBoxLayout(self.product_brand_block)
+        self.product_brand_layout.setContentsMargins(0, 0, 0, 0)
+        self.product_brand_layout.setSpacing(2)
+        self.product_logo = QtWidgets.QLabel(parent=self.product_brand_block)
+        self.product_logo.setObjectName("productLogo")
+        self.product_logo.setText("AIDC")
+        self.product_subtitle = QtWidgets.QLabel(parent=self.product_brand_block)
+        self.product_subtitle.setObjectName("productSubtitle")
+        self.product_subtitle.setText("AIDC CAN Host v" + str(config.get("Version", "")))
+        self.product_context = QtWidgets.QLabel(parent=self.product_brand_block)
+        self.product_context.setObjectName("productContext")
+        self.product_context.setText("Project: AIDC    Profile: Test_4_10")
+        self.product_brand_layout.addWidget(self.product_logo)
+        self.product_brand_layout.addWidget(self.product_subtitle)
+        self.product_brand_layout.addWidget(self.product_context)
+
+        self.product_command_bar = QtWidgets.QFrame(parent=self.product_header)
+        self.product_command_bar.setObjectName("productCommandBar")
+        self.product_command_layout = QHBoxLayout(self.product_command_bar)
+        self.product_command_layout.setContentsMargins(0, 0, 0, 0)
+        self.product_command_layout.setSpacing(8)
+
+        self.product_header_layout.addWidget(self.product_brand_block, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.product_header_layout.addStretch(1)
+        self.product_header_layout.addWidget(self.product_command_bar, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # 创建水平和垂直布局
         v_layout = QVBoxLayout()
+        v_layout.setContentsMargins(0, 0, 0, 0)
+        v_layout.setSpacing(0)
         h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(0)
 
         # 添加水平伸缩空间，实现水平居中
-        h_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
         h_layout.addWidget(self.tabWidget)
-        h_layout.addSpacerItem(QSpacerItem(40, 20, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum))
 
         # 添加垂直伸缩空间，实现垂直居中
-        v_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
-        v_layout.addLayout(h_layout)
-        v_layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+        v_layout.addWidget(self.product_header)
+        v_layout.addLayout(h_layout, 1)
 
         # 将布局设置到窗口
         Form.setLayout(v_layout)

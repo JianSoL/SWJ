@@ -3,10 +3,11 @@ from datetime import datetime
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QTimer, QDateTime
 from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QInputDialog,QMessageBox
+from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QInputDialog,QMessageBox,QLabel,QSpinBox,QPushButton,QCheckBox
 import sys
 import time
 import threading
+import json
 from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
 from functools import partial
@@ -117,6 +118,27 @@ for i in config["ADDRESLIST"]:
 g_index = 0
 
 
+def load_can_board_config(file_name="config.json"):
+    defaults = {
+        "can_type": "usb_can_2eu",
+        "can_idx": 0,
+        "chn": 1,
+        "baud_rate": 500,
+    }
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)
+    try:
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            loaded = json.load(config_file)
+    except FileNotFoundError:
+        return defaults
+
+    defaults.update({key: loaded[key] for key in defaults.keys() & loaded.keys()})
+    defaults["can_idx"] = int(defaults["can_idx"])
+    defaults["chn"] = int(defaults["chn"])
+    defaults["baud_rate"] = int(defaults["baud_rate"])
+    return defaults
+
+
 class Edit(Ui_Form, QWidget):
     # 定义初始化进程
     def __init__(self):
@@ -124,11 +146,233 @@ class Edit(Ui_Form, QWidget):
         super().__init__()
         # 往空QWidget中放置UI内容
         self.setupUi(self)
+        self._apply_release_theme()
         #初始化各种功能
         self.init()
 
 
+    def _apply_release_theme(self):
+        if hasattr(self, "tabWidget"):
+            self.tabWidget.setStyleSheet("")
+        theme_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "UI", "release_theme.qss")
+        try:
+            with open(theme_path, "r", encoding="utf-8") as theme_file:
+                self.setStyleSheet(theme_file.read())
+        except OSError as exc:
+            print(f"load release theme failed: {exc}")
+
+
+    def _add_command_caption(self, text):
+        label = QLabel(text, self.product_command_bar)
+        label.setObjectName("fieldCaption")
+        self.product_command_layout.addWidget(label)
+        return label
+
+
+    def _setup_product_controls(self):
+        if getattr(self, "_product_controls_ready", False):
+            return
+        if not hasattr(self, "product_command_layout"):
+            return
+
+        self._add_command_caption("设备")
+        self.device_index_spinbox = QSpinBox(self.product_command_bar)
+        self.device_index_spinbox.setRange(0, 31)
+        self.device_index_spinbox.setFixedWidth(64)
+        self.product_command_layout.addWidget(self.device_index_spinbox)
+
+        self._add_command_caption("通道")
+        self.channel_index_spinbox = QSpinBox(self.product_command_bar)
+        self.channel_index_spinbox.setRange(0, 7)
+        self.channel_index_spinbox.setFixedWidth(64)
+        self.product_command_layout.addWidget(self.channel_index_spinbox)
+
+        self._add_command_caption("波特率")
+        self.baud_rate_spinbox = QSpinBox(self.product_command_bar)
+        self.baud_rate_spinbox.setRange(5, 1000)
+        self.baud_rate_spinbox.setSingleStep(5)
+        self.baud_rate_spinbox.setSuffix(" k")
+        self.baud_rate_spinbox.setFixedWidth(92)
+        self.product_command_layout.addWidget(self.baud_rate_spinbox)
+
+        self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
+        self.product_command_layout.addWidget(self.save_log_checkbox)
+
+        self.apply_bus_button = QPushButton("应用并重连", self.product_command_bar)
+        self.apply_bus_button.setObjectName("primaryButton")
+        self.apply_bus_button.clicked.connect(self.on_apply_bus_settings)
+        self.product_command_layout.addWidget(self.apply_bus_button)
+
+        self.bus_status_label = QLabel("CAN: 未连接", self.product_command_bar)
+        self.bus_status_label.setObjectName("statusPill")
+        self.product_command_layout.addWidget(self.bus_status_label)
+
+        self.frame_status_label = QLabel("RX: 0", self.product_command_bar)
+        self.frame_status_label.setObjectName("statusPill")
+        self.product_command_layout.addWidget(self.frame_status_label)
+
+        self._product_controls_ready = True
+
+
+    def _load_bus_config_controls(self, can_config):
+        if not getattr(self, "_product_controls_ready", False):
+            return
+        self.device_index_spinbox.setValue(int(can_config.get("can_idx", 0)))
+        self.channel_index_spinbox.setValue(int(can_config.get("chn", 1)))
+        self.baud_rate_spinbox.setValue(int(can_config.get("baud_rate", 500)))
+        self.save_log_checkbox.setChecked(int(config.get("SAVE_LOG", 0)) == 1)
+
+
+    def _current_bus_config(self):
+        can_config = load_can_board_config()
+        if getattr(self, "_product_controls_ready", False):
+            can_config["can_idx"] = int(self.device_index_spinbox.value())
+            can_config["chn"] = int(self.channel_index_spinbox.value())
+            can_config["baud_rate"] = int(self.baud_rate_spinbox.value())
+        return can_config
+
+
+    def _save_bus_config(self, can_config):
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        saved = {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                saved = json.load(config_file)
+        except (FileNotFoundError, json.JSONDecodeError):
+            saved = {}
+        saved.update({
+            "can_type": can_config["can_type"],
+            "can_idx": int(can_config["can_idx"]),
+            "chn": int(can_config["chn"]),
+            "baud_rate": int(can_config["baud_rate"]),
+        })
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(saved, config_file, ensure_ascii=False, indent=2)
+            config_file.write("\n")
+
+
+    def _refresh_dynamic_style(self, widget):
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
+
+
+    def _set_status_pill(self, label, text, status):
+        if label is None:
+            return
+        label.setText(text)
+        label.setProperty("status", status)
+        self._refresh_dynamic_style(label)
+
+
+    def _set_bus_status(self, connected, message=None, status=None):
+        self.can_ready = bool(connected)
+        if connected:
+            status_text = message or "CAN: 已连接"
+            status_name = status or "success"
+        else:
+            status_text = message or "CAN: 未连接"
+            status_name = status or "danger"
+        self._set_status_pill(getattr(self, "bus_status_label", None), status_text, status_name)
+
+
+    def _update_rx_status(self):
+        self._set_status_pill(
+            getattr(self, "frame_status_label", None),
+            f"RX: {getattr(self, 'rx_frame_count', 0)}",
+            "info",
+        )
+
+
+    def _stop_can_timers(self):
+        for timer_name in ("send_time", "send_time1", "timer1", "timerResData", "timerDI", "timer_Forcecharge"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+
+
+    def _start_can_timers(self):
+        self.send_time.start(200)
+        self.send_time1.start(10)
+        self.timer1.start(10)
+        if int(config.get("SAVE_LOG", 0)) == 1 and self.save_log_checkbox.isChecked():
+            self.timerResData.start(1000)
+
+
+    def _close_can_device(self):
+        self._stop_can_timers()
+        can_device = getattr(self, "c", None)
+        if can_device is not None:
+            try:
+                can_device.close()
+            except Exception as exc:
+                print(f"close CAN failed: {exc}")
+        self._set_bus_status(False, "CAN: 未连接", "warning")
+
+
+    def _connect_can(self, show_dialog=False):
+        self._stop_can_timers()
+        self.rx_frame_count = 0
+        self._update_rx_status()
+        can_config = self._current_bus_config()
+        config["SAVE_LOG"] = 1 if getattr(self, "save_log_checkbox", None) and self.save_log_checkbox.isChecked() else 0
+
+        if getattr(self, "c", None) is not None:
+            try:
+                self.c.close()
+            except Exception as exc:
+                print(f"close old CAN failed: {exc}")
+
+        self.c = Communication()
+        stat, msg = self.c.set_can_board_configuration(
+            can_type=can_config["can_type"],
+            can_idx=can_config["can_idx"],
+            chn=can_config["chn"],
+            baud_rate=can_config["baud_rate"],
+        )
+        if not stat:
+            self._set_bus_status(False, f"CAN: 配置失败 {msg}", "danger")
+            if show_dialog:
+                QMessageBox.warning(self, "CAN配置失败", msg)
+            return False
+
+        try:
+            self.c.open_new()
+        except Exception as exc:
+            error_msg = str(exc)
+            self._set_bus_status(False, "CAN: 打开失败", "danger")
+            if show_dialog:
+                QMessageBox.warning(self, "CAN打开失败", error_msg)
+            return False
+
+        self._save_bus_config(can_config)
+        self._set_bus_status(
+            True,
+            f"CAN: 设备{can_config['can_idx']} 通道{can_config['chn']} {can_config['baud_rate']}k",
+            "success",
+        )
+        self._start_can_timers()
+        return True
+
+
+    def on_apply_bus_settings(self):
+        self._connect_can(show_dialog=True)
+
+
+    def closeEvent(self, event):
+        self._close_can_device()
+        super().closeEvent(event)
+
+
     def init(self):
+        self.can_ready = False
+        self.rx_frame_count = 0
+        self.c = None
+        self._setup_product_controls()
+        self._load_bus_config_controls(load_can_board_config())
+        self._set_bus_status(False, "CAN: 未连接", "warning")
+        self._update_rx_status()
+
         # 创建一个QTimer对象
         self.send_time = QTimer(self)
         # 给QTimer设定一个时间，每到达这个时间一次就会调用一次该方法
@@ -288,15 +532,8 @@ class Edit(Ui_Form, QWidget):
 
         self.timerResData = QTimer(self)
         self.timerResData.timeout.connect(self.SaveRunData)
-        if config["SAVE_LOG"]==1:
-            self.timerResData.start(1000)
-
-        # 新建对象
-        self.c = Communication()
-        # 配置CAN卡, 型号：USB_CAN_2EU, CAN卡索引: 0, CAN卡通道：channel_0, 波特率: 500kbps
-        self.c.set_can_board_configuration(can_type="usb_can_2eu", can_idx=0, chn=1, baud_rate=500)
-        # 打开CAN卡'
-        self.c.open_new()
+        # Started after CAN opens successfully when logging is enabled.
+        self._connect_can(show_dialog=False)
 
 
 
@@ -316,7 +553,17 @@ class Edit(Ui_Form, QWidget):
 
 
     def CANCommunication(self):
-        self.rec = self.c._PrintReceiveData()
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            return
+        try:
+            self.rec = self.c._PrintReceiveData()
+        except Exception as exc:
+            self._stop_can_timers()
+            self._set_bus_status(False, f"CAN: 接收失败 {exc}", "danger")
+            return
+        if self.rec:
+            self.rx_frame_count += self.rec
+            self._update_rx_status()
         ID = ""
         #time.sleep(1)
         for i in range(0,self.rec):

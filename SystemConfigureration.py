@@ -25,12 +25,12 @@ class Configuration():
 
     def __init__(self):
         self.can_type = "usb_can_2eu" # CAN卡类型
-        self.chn = 0  # CAN卡通道
+        self.chn = 1  # CAN卡通道
         self.can_idx = 0 # CAN 卡 index
         self.baud_rate=500 # 波特率
 
     def setCan(self,can_type =Supported.Type_USB_CAN_2EU,  \
-               chn = Supported.Channel_CH0,can_idx = Supported.Index_0, baud_rate = Supported.Baudrate_500k):
+               chn = Supported.Channel_CH1,can_idx = Supported.Index_0, baud_rate = Supported.Baudrate_500k):
         self.can_type = can_type
         self.chn = chn
         self.can_idx = can_idx
