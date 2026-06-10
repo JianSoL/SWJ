@@ -3,7 +3,7 @@ from datetime import datetime
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QTimer, QDateTime
 from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QInputDialog,QMessageBox,QLabel,QSpinBox,QPushButton,QCheckBox
+from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QMessageBox,QLabel,QSpinBox,QPushButton,QCheckBox
 import sys
 import time
 import threading
@@ -391,7 +391,7 @@ class Edit(Ui_Form, QWidget):
         self.timer.timeout.connect(self.load_next_row)  # 逐行加载
         self.current_COUNT = 0
         # 开始定时器，每 10 毫秒加载一行
-        self.timer.start(1)
+        # The alarm page now refreshes directly from CAN responses.
 
         #BAU请求数据定时器
         self.timer1 = QTimer(self)
@@ -407,7 +407,7 @@ class Edit(Ui_Form, QWidget):
 
 
         #告警切换槽函数
-        self.S21.comboBox.currentIndexChanged.connect(self.REAlarmDatafh)
+        self.S21.comboBox.currentIndexChanged.connect(self.on_alarm_cluster_changed)
 
 
 
@@ -417,7 +417,7 @@ class Edit(Ui_Form, QWidget):
         #self.timer_Forcecharge.start(1)
 
         self.S17.pushButton.clicked.connect(self.WordMode)
-        self.S21.button.clicked.connect(self.REAlarmDatafh)
+        self.S21.button.clicked.connect(self.on_alarm_parameter_read)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -454,17 +454,20 @@ class Edit(Ui_Form, QWidget):
         #参数管理
         self.S23.pushButton.clicked.connect(self.ParProcess)
 
-        self.S21.submit_button.clicked.connect(self.RequestSetData)
+        self.S21.submit_button.clicked.connect(self.on_alarm_parameter_save_flash)
 
         self.FLAG_WORK_MODE = 0
 
 
         #修改告警槽函数
-        self.S21.modify_button.clicked.connect(self.ModifyAlarm)
+        self.S21.modify_button.clicked.connect(self.on_alarm_parameter_write_current)
 
 
         #告警修改索引
         self.AlarmIndex = 0
+        self.alarm_request_limit = self.S21.alarm_count() * 32
+        self.pending_alarm_writes = {}
+        self.S21.set_cluster_context()
 
 
         self.table_index = 1
@@ -1423,10 +1426,14 @@ class Edit(Ui_Form, QWidget):
             #     for j in range(32):
             try:
                 if (("0x1881F2" + config["ADDRESLIST"][self.S21.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
-                    varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
-                    varid = varid - config["Glaoal_Index_alarm"]
-                    # self.S21.setItem(varid//32,varid%32+1,str(byte4+byte5*256))
-                    Alarm_list[varid // 32][varid % 32] = byte4 + byte5 * 256
+                    data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
+                    varid = data_id - config["Glaoal_Index_alarm"]
+                    alarm_row = varid // 32
+                    field_index = varid % 32
+                    if 0 <= alarm_row < len(Alarm_list) and 0 <= field_index < 32:
+                        Alarm_list[alarm_row][field_index] = byte4 + byte5 * 256
+                        if alarm_row < self.S21.alarm_count():
+                            self.S21.update_alarm_row(alarm_row, Alarm_list[alarm_row])
                 # print(Alarm_list)
             except:
                 pass
@@ -1435,7 +1442,24 @@ class Edit(Ui_Form, QWidget):
             if (("0x1883F2" + config["ADDRESLIST"][self.S21.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
                 varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
 
-                if(varid == self.AlarmIndex):
+                pending = getattr(self, "pending_alarm_writes", {})
+                if varid in pending:
+                    success = (byte4 + byte5 * 256) != 0
+                    if not success:
+                        self.pending_alarm_write_failed = getattr(self, "pending_alarm_write_failed", 0) + 1
+                    pending.pop(varid, None)
+                    if pending:
+                        self.S21.set_status_text(f"告警参数写入中，剩余 {len(pending)} 项...")
+                    else:
+                        failed = getattr(self, "pending_alarm_write_failed", 0)
+                        if failed:
+                            self.S21.set_status_text(f"告警参数写入完成，失败 {failed} 项，请检查工装模式或参数范围。")
+                            QMessageBox.warning(self, "告警参数写入", f"写入完成，但有 {failed} 项被下位机拒绝。")
+                        else:
+                            self.S21.set_status_text("告警参数写入成功。")
+                            QMessageBox.information(self, "告警参数写入", "选中告警参数写入成功。")
+                    self.pending_alarm_writes = pending
+                elif(varid == self.AlarmIndex):
                     if(byte4==1):
                         QMessageBox.information(self, "修改结果显示", "修改成功！")
 
@@ -1652,19 +1676,94 @@ class Edit(Ui_Form, QWidget):
 
 
 
+    def on_alarm_cluster_changed(self):
+        self.S21.set_cluster_context()
+        self.S21.clear_cached_values()
+        self.on_alarm_parameter_read()
+
+
+    def on_alarm_parameter_read(self):
+        global g_index
+        g_index = 0
+        self.current_COUNT = 0
+        self.alarm_request_limit = self.S21.alarm_count() * 32
+        self.S21.set_cluster_context()
+        self.S21.clear_cached_values()
+        if not getattr(self, "can_ready", False):
+            self.S21.set_status_text("CAN未连接，无法读取告警参数。")
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取告警参数。")
+            return
+        if self.send_time1 is not None and not self.send_time1.isActive():
+            self.send_time1.start(10)
+        self.S21.set_status_text(
+            f"正在读取告警参数：共 {self.alarm_request_limit} 个字段。"
+        )
+
+
+    def on_alarm_parameter_write_current(self):
+        if not getattr(self, "can_ready", False):
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再写入告警参数。")
+            return
+        alarm_id, raw_fields = self.S21.build_current_raw_fields()
+        if alarm_id is None:
+            QMessageBox.warning(self, "未选择告警", "请先在告警列表中选择一条告警。")
+            return
+        if hasattr(self.S21, "has_complete_current_record") and not self.S21.has_complete_current_record():
+            QMessageBox.warning(self, "告警未读取", "请先读取并选中告警，确认右侧参数已刷新后再写入。")
+            return
+        if not raw_fields:
+            QMessageBox.warning(self, "无可写入字段", "当前告警没有可写入参数。")
+            return
+
+        base_id = config["Glaoal_Index_alarm"] + alarm_id * 32
+        pending = {}
+        for field_index, raw_value in sorted(raw_fields.items()):
+            data_id = base_id + int(field_index)
+            raw_value = int(raw_value) & 0xFFFF
+            data = [
+                data_id & 0xFF,
+                (data_id >> 8) & 0xFF,
+                (data_id >> 16) & 0xFF,
+                (data_id >> 24) & 0xFF,
+                raw_value & 0xFF,
+                (raw_value >> 8) & 0xFF,
+                0,
+                0,
+            ]
+            pending[data_id] = field_index
+            self.SetData(self.S21.comboBox.currentIndex(), data)
+            time.sleep(0.003)
+
+        self.pending_alarm_writes = pending
+        self.pending_alarm_write_failed = 0
+        self.AlarmIndex = base_id
+        self.S21.set_status_text(f"已发送 {len(pending)} 个告警参数写入请求，等待下位机确认。")
+
+
+    def on_alarm_parameter_save_flash(self):
+        if not getattr(self, "can_ready", False):
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再保存参数。")
+            return
+        data = [4, 0, 0, 0, 8, 0, 0, 0]
+        self.CtrlData(self.S21.comboBox.currentIndex(), data)
+        self.S21.set_status_text("已发送保存参数到FLASH命令，请观察下位机返回状态。")
+
+
     def RequestAlarmData(self):
         global g_index
 
-        #self.button.clicked.disconnect(self.on_button_clicked)
-
+        if not getattr(self, "can_ready", False):
+            return
         Cindex = self.S21.comboBox.currentIndex()
-        #for i in range(64*32):
-        #for i in range(10):
-        #print(g_index)
-        b1 = (config["Glaoal_Index_alarm"]+g_index)&(0xFF)
-        b2 = ((config["Glaoal_Index_alarm"]+g_index)>>8)&(0xFF)
-        b3 = ((config["Glaoal_Index_alarm"] + g_index) >> 16) & (0xFF)
-        b4 = ((config["Glaoal_Index_alarm"] + g_index) >> 24) & (0xFF)
+        request_limit = getattr(self, "alarm_request_limit", self.S21.alarm_count() * 32)
+        if g_index >= request_limit:
+            return
+
+        data_id = config["Glaoal_Index_alarm"] + g_index
+        b1 = data_id & 0xFF
+        b2 = (data_id >> 8) & 0xFF
+        b3 = (data_id >> 16) & 0xFF
+        b4 = (data_id >> 24) & 0xFF
         data = [b1,b2,b3,b4,0,0,0,0]
 
         if Cindex==0:
@@ -1672,22 +1771,18 @@ class Edit(Ui_Form, QWidget):
         if Cindex != 0:
             self.c.Transmit(0x1880A0F2 + ((Cindex-1) << 8), data, extern_flag=True, data_len=8)
 
-
-        #self.c.Transmit(0x1880A0F2 + (Cindex << 8), data, extern_flag=True, data_len=8)
-        if g_index>64*32:
-            self.send_time1.timeout.disconnect(self.RequestAlarmData)
         g_index = g_index+1
+        if g_index >= request_limit:
+            self.S21.set_status_text("告警参数读取请求已发送完成，等待下位机响应刷新表格。")
 
 
 
     def REAlarmDatafh(self):
-        global g_index
-        g_index = 0
-        self.current_COUNT = 0
-        self.send_time1.timeout.connect(self.RequestAlarmData)
-        self.timer.start(1)
+        self.on_alarm_parameter_read()
 
     def load_next_row(self):
+        if hasattr(self.S21, "update_alarm_row"):
+            return
         #self.tabWidget.setUpdatesEnabled(False)
         ROW = self.current_COUNT//50
         COL = self.current_COUNT%50
@@ -2392,29 +2487,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def ModifyAlarm(self):
-        #获取行列0 1
-
-        selected_items = self.S21.table_widget.selectedItems()
-
-        if selected_items:
-            selected_item = selected_items[0]  # 假设用户只选择了一个单元格
-            row = selected_item.row()
-            col = selected_item.column()
-            print(row,col)
-
-            new_value, ok = QInputDialog.getText(self, "修改单元格", f"请输入新的值 (行 {row}, 列 {col}):")
-            print(new_value)
-            #QInputDialog.getText(self)
-
-            if ok and new_value:  # 如果用户点击了OK并输入了新值
-                res_index, res_data = IndexTrans(row,col,int(new_value),self.S21.table_widget)
-                res_data = to_unsigned_16bit(res_data)
-                self.AlarmIndex = res_index
-                print(res_index, res_data)
-
-                data =[res_index&0xFF,(res_index>>8)&0xFF,(res_index>>16)&0xFF,(res_index>>24)&0xFF,res_data&0xFF,(res_data>>8)&0xFF,0,0]
-                self.SetData(self.S21.comboBox.currentIndex(),data)
-                #pass
+        self.on_alarm_parameter_write_current()
 
 
     def SaveRunData(self):
