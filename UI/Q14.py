@@ -11,7 +11,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QVBoxLayout,QSpacerItem,QSizePolicy,QHBoxLayout
 import sys
 from PyQt6.QtCore import Qt
-from .T24 import Ui_Form as UI24
+from .T24 import HostControlPage as UI24
 from .T25 import BatteryMonitor as UI25
 from .T26 import BatteryMonitorBAL as UI26
 from .T27 import BatteryMonitorTem as UI27
@@ -161,18 +161,16 @@ class Ui_Form(object):
 
 
         """
-        self.setStyleSheet(stylesheet)
+        Form.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+7)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+8)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.label = [list(row) for row in zip(*self.label)]#转置
-        self._hidden_control_page = QtWidgets.QWidget(Form)
         self._hidden_di_page = QtWidgets.QWidget(Form)
         self._hidden_parameter_page = QtWidgets.QWidget(Form)
-        self._hidden_control_page.hide()
         self._hidden_di_page.hide()
         self._hidden_parameter_page.hide()
         self.S17 = UI24()
@@ -186,7 +184,8 @@ class Ui_Form(object):
         self.S25 = UI32()
         self.S26 = UI33()
 
-        self.S17.setupUi(self._hidden_control_page)
+        layout = QVBoxLayout(self.tab[CU_NUM+4])
+        layout.addWidget(self.S17)
 
         layout = QVBoxLayout(self.tab[CU_NUM])
         layout.addWidget(self.S18)
@@ -204,13 +203,13 @@ class Ui_Form(object):
 
         self.S23.setupUi(self._hidden_parameter_page)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+4])
+        layout = QVBoxLayout(self.tab[CU_NUM+5])
         layout.addWidget(self.S24)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+5])
+        layout = QVBoxLayout(self.tab[CU_NUM+6])
         layout.addWidget(self.S25)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+6])
+        layout = QVBoxLayout(self.tab[CU_NUM+7])
         layout.addWidget(self.S26)
 
 
@@ -246,7 +245,7 @@ class Ui_Form(object):
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
 
-        for i in range(0,CU_NUM+7):
+        for i in range(0,CU_NUM+8):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
             self.tabWidget.tabBar().setTabVisible(0, False)
@@ -285,9 +284,10 @@ class Ui_Form(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+1]), "均衡")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+2]), "单体温度")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "告警")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "电芯异常")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "均衡控制")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "历史日志")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "主机控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "电芯异常")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "均衡控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+7]), "历史日志")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 

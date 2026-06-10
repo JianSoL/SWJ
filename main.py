@@ -20,6 +20,34 @@ import os
 import copy
 from SIGNAL import *
 from util import *
+
+CMD_READ_VAR = 0x80
+RESP_READ_VAR = 0x81
+CMD_WRITE_VAR = 0x82
+RESP_WRITE_VAR = 0x83
+CMD_CTRL_HARDWARE = 0x88
+RESP_CTRL_HARDWARE = 0x89
+CMD_SET_TIME = 0x90
+RESP_SET_TIME = 0x91
+CMD_DECODE_SECU = 0xA0
+RESP_DECODE_SECU = 0xA1
+
+CTRL_WORK_MODE = 0x01
+CTRL_CHNNEL = 0x02
+CTRL_PARA_CONFIG = 0x04
+
+WORK_MODE_NORMAL = 0
+WORK_MODE_GZ_TEST = 1
+VAR_SYS_WORK_MODE = 11
+VAR_SYS_SOC = 16
+VAR_SYS_USER_SET_SOC = 445
+ID_PAR_SYS_START = 0x90400
+PAR_SYS_OUTPUT_HVIL_FREQ = ID_PAR_SYS_START + 197
+PAR_SYS_OUTPUT_HVIL_DUTY_RATIO = ID_PAR_SYS_START + 198
+CTRL_PARA_CONFIG_RESET_FACTORY = 2
+CTRL_PARA_CONFIG_RESET_RUN = 3
+CTRL_PARA_CONFIG_RESET_PRODUCT_INFO = 5
+CTRL_PARA_CONFIG_SAVE_ALL_TO_FLASH = 8
 Vres = [0 for i in range(0, int(config["LECU_NUM"]*int(config["CELL_NUM"])))]
 VresBAL = [0 for i in range(0, int(config["LECU_NUM"]*int(config["CELL_NUM"])))]
 VresTem = [0 for i in range(0, int(config["LECU_NUM"]*int(config["CELL_Tem_NUM"])))]
@@ -231,6 +259,19 @@ class Edit(Ui_Form, QWidget):
         self.apply_bus_button.clicked.connect(self.on_apply_bus_settings)
         self.product_command_layout.addWidget(self.apply_bus_button)
 
+        self.factory_on_button = QPushButton("工装开", self.product_command_bar)
+        self.factory_on_button.clicked.connect(lambda: self.on_factory_mode_change(True))
+        self.product_command_layout.addWidget(self.factory_on_button)
+
+        self.factory_off_button = QPushButton("工装关", self.product_command_bar)
+        self.factory_off_button.clicked.connect(lambda: self.on_factory_mode_change(False))
+        self.product_command_layout.addWidget(self.factory_off_button)
+
+        self.factory_status_label = QLabel("工装状态: 未知", self.product_command_bar)
+        self.factory_status_label.setObjectName("statusPill")
+        self.factory_status_label.setProperty("status", "warning")
+        self.product_command_layout.addWidget(self.factory_status_label)
+
         self.bus_status_label = QLabel("CAN: 未连接", self.product_command_bar)
         self.bus_status_label.setObjectName("statusPill")
         self.product_command_layout.addWidget(self.bus_status_label)
@@ -281,7 +322,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def _control_tab_index(self):
-        return -1
+        return config["BCU_NUM"] + 6
 
 
     def _voltage_tab_index(self):
@@ -309,15 +350,15 @@ class Edit(Ui_Form, QWidget):
 
 
     def _abnormal_cell_tab_index(self):
-        return config["BCU_NUM"] + 6
-
-
-    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 7
 
 
-    def _history_log_tab_index(self):
+    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 8
+
+
+    def _history_log_tab_index(self):
+        return config["BCU_NUM"] + 9
 
 
     def _valid_cluster_indices(self):
@@ -484,6 +525,8 @@ class Edit(Ui_Form, QWidget):
             self.selected_cluster_address = self._cluster_address(cluster_index)
             self._sync_cluster_selector_from_index(cluster_index)
             self._sync_page_cluster_combo_boxes(cluster_index)
+            if hasattr(self, "S17"):
+                self.S17.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S21"):
                 self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
@@ -589,6 +632,537 @@ class Edit(Ui_Form, QWidget):
             f"RX: {getattr(self, 'rx_frame_count', 0)}",
             "info",
         )
+
+
+    def _set_factory_status(self, mode_value=None, text=None, status=None):
+        if text is None:
+            if mode_value is None:
+                text = "工装状态: 未知"
+                status = status or "warning"
+            elif int(mode_value) == WORK_MODE_GZ_TEST:
+                text = "工装状态: 开"
+                status = status or "success"
+            else:
+                text = "工装状态: 关"
+                status = status or "warning"
+        self._set_status_pill(getattr(self, "factory_status_label", None), text, status or "info")
+
+
+    def _host_control_ready(self):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            self.S17.set_status_text("CAN未连接，无法执行主机控制命令。", failed=True)
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再执行主机控制命令。")
+            return False
+        if self._active_cluster_index() <= 0:
+            self.S17.set_status_text("未选择目标簇。", failed=True)
+            QMessageBox.warning(self, "未选择簇", "请先选择目标簇。")
+            return False
+        return True
+
+
+    def _diag_addr(self, cluster_index):
+        return int(str(config["ADDRESLIST"][int(cluster_index)]), 16)
+
+
+    def _diag_request_id(self, cluster_index, command_pf):
+        target = self._diag_addr(cluster_index)
+        source = int(str(config.get("IPCaddr", "F2")), 16)
+        return 0x18000000 | (int(command_pf) << 16) | (target << 8) | source
+
+
+    def _diag_response_id(self, cluster_index, response_pf):
+        source = self._diag_addr(cluster_index)
+        target = int(str(config.get("IPCaddr", "F2")), 16)
+        return 0x18000000 | (int(response_pf) << 16) | (target << 8) | source
+
+
+    def _flush_diag_rx(self):
+        self._diag_frame_backlog = []
+        flushed_count = 0
+        for _ in range(4):
+            frames = self.c.receive_frames(max_count=200, timeout_ms=0)
+            if not frames:
+                break
+            flushed_count += len(frames)
+        if flushed_count:
+            self.rx_frame_count += flushed_count
+            self._update_rx_status()
+
+
+    def _pop_diag_backlog(self, expected_id, predicate):
+        backlog = getattr(self, "_diag_frame_backlog", [])
+        for index, frame in enumerate(backlog):
+            if int(frame.frame_id) == int(expected_id) and predicate(frame):
+                return backlog.pop(index)
+        return None
+
+
+    def _wait_diag_frame(self, expected_id, predicate, timeout_s, label):
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        while time.monotonic() <= deadline:
+            frame = self._pop_diag_backlog(expected_id, predicate)
+            if frame is not None:
+                return frame
+
+            remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
+            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 50))
+            if frames:
+                self.rx_frame_count += len(frames)
+                self._update_rx_status()
+
+            for frame_index, frame in enumerate(frames):
+                if int(frame.frame_id) != int(expected_id):
+                    continue
+                if predicate(frame):
+                    self._diag_frame_backlog.extend(
+                        later_frame
+                        for later_frame in frames[frame_index + 1:]
+                        if int(later_frame.frame_id) == int(expected_id)
+                    )
+                    return frame
+                self._diag_frame_backlog.append(frame)
+            QApplication.processEvents()
+        raise RuntimeError(f"{label}响应超时")
+
+
+    def _send_diag_request(self, cluster_index, command_pf, payload, label):
+        data = list(payload[:8]) if isinstance(payload, (list, tuple)) else list(bytes(payload)[:8])
+        data = (data + [0] * 8)[:8]
+        result = self.c.Transmit(
+            self._diag_request_id(cluster_index, command_pf),
+            data,
+            extern_flag=True,
+            data_len=8,
+        )
+        if result <= 0:
+            raise RuntimeError(f"{label}发送失败")
+        return result
+
+
+    def _read_data_u16_sync(self, cluster_index, data_id, timeout_s=1.0, retries=0):
+        data_id = int(data_id)
+        payload = data_id.to_bytes(4, byteorder="little", signed=False) + b"\x00\x00\x00\x00"
+        expected_id = self._diag_response_id(cluster_index, RESP_READ_VAR)
+        last_error = None
+        for attempt in range(max(int(retries), 0) + 1):
+            try:
+                self._send_diag_request(cluster_index, CMD_READ_VAR, payload, "读取索引")
+                frame = self._wait_diag_frame(
+                    expected_id,
+                    lambda frame: (
+                        len(frame.data) >= 7
+                        and int.from_bytes(frame.data[:4], byteorder="little", signed=False) == data_id
+                    ),
+                    timeout_s,
+                    "读取索引",
+                )
+                if not frame.data[6]:
+                    raise RuntimeError(f"索引 0x{data_id:X} 读取被下位机拒绝")
+                return int.from_bytes(frame.data[4:6], byteorder="little", signed=False)
+            except Exception as exc:
+                last_error = exc
+                if attempt < max(int(retries), 0):
+                    time.sleep(0.03)
+                    continue
+                raise
+        raise last_error or RuntimeError("读取索引失败")
+
+
+    def _write_data_u16_sync(self, cluster_index, data_id, value, timeout_s=1.0):
+        data_id = int(data_id)
+        value = int(value) & 0xFFFF
+        payload = (
+            data_id.to_bytes(4, byteorder="little", signed=False)
+            + value.to_bytes(2, byteorder="little", signed=False)
+            + b"\x00\x00"
+        )
+        expected_id = self._diag_response_id(cluster_index, RESP_WRITE_VAR)
+        self._send_diag_request(cluster_index, CMD_WRITE_VAR, payload, "写入索引")
+        frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: (
+                len(frame.data) >= 6
+                and int.from_bytes(frame.data[:4], byteorder="little", signed=False) == data_id
+            ),
+            timeout_s,
+            "写入索引",
+        )
+        accepted = int.from_bytes(frame.data[4:6], byteorder="little", signed=False)
+        if not accepted:
+            raise RuntimeError(f"索引 0x{data_id:X} 写入被下位机拒绝")
+        return True
+
+
+    def _authorize_control_sync(self, cluster_index, timeout_s=1.0):
+        seed_request = bytes((0x02, 0x27, 0x11, 0, 0, 0, 0, 0))
+        expected_id = self._diag_response_id(cluster_index, RESP_DECODE_SECU)
+        self._send_diag_request(cluster_index, CMD_DECODE_SECU, seed_request, "工装解锁种子请求")
+        seed_frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: (
+                len(frame.data) >= 7
+                and (
+                    frame.data[:3] == bytes((0x06, 0x67, 0x11))
+                    or frame.data[:2] == bytes((0x03, 0x7F))
+                )
+            ),
+            timeout_s,
+            "工装解锁种子",
+        )
+        if seed_frame.data[:3] != bytes((0x06, 0x67, 0x11)):
+            raise RuntimeError("工装解锁种子请求被下位机拒绝")
+
+        seed = int.from_bytes(seed_frame.data[3:7], byteorder="big", signed=False)
+        key = CanDiag_Seed_2_Key(seed)
+        key_payload = bytes(
+            (
+                0x06,
+                0x27,
+                0x12,
+                (key >> 24) & 0xFF,
+                (key >> 16) & 0xFF,
+                (key >> 8) & 0xFF,
+                key & 0xFF,
+                0,
+            )
+        )
+        self._send_diag_request(cluster_index, CMD_DECODE_SECU, key_payload, "工装解锁密钥")
+        key_frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: (
+                len(frame.data) >= 3
+                and (
+                    frame.data[:3] == bytes((0x02, 0x67, 0x12))
+                    or frame.data[:2] == bytes((0x03, 0x7F))
+                )
+            ),
+            timeout_s,
+            "工装解锁密钥",
+        )
+        if key_frame.data[:3] != bytes((0x02, 0x67, 0x12)):
+            raise RuntimeError("工装解锁密钥被下位机拒绝")
+        return True
+
+
+    def _execute_control_command_sync(
+        self,
+        cluster_index,
+        control_code,
+        para1=0,
+        para2=0,
+        para3=0,
+        timeout_s=1.0,
+        label="控制命令",
+        authorize=True,
+    ):
+        if authorize:
+            self._authorize_control_sync(cluster_index, timeout_s=timeout_s)
+        payload = (
+            int(control_code).to_bytes(2, byteorder="little", signed=False)
+            + (int(para1) & 0xFFFF).to_bytes(2, byteorder="little", signed=False)
+            + (int(para2) & 0xFFFF).to_bytes(2, byteorder="little", signed=False)
+            + (int(para3) & 0xFFFF).to_bytes(2, byteorder="little", signed=False)
+        )
+        expected_id = self._diag_response_id(cluster_index, RESP_CTRL_HARDWARE)
+        self._send_diag_request(cluster_index, CMD_CTRL_HARDWARE, payload, label)
+        frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: len(frame.data) >= 1,
+            timeout_s,
+            label,
+        )
+        if frame.data[0] != 1:
+            raise RuntimeError(f"{label}被下位机拒绝")
+        return True
+
+
+    def _set_factory_mode_sync(self, cluster_index, enabled):
+        mode = WORK_MODE_GZ_TEST if enabled else WORK_MODE_NORMAL
+        self._execute_control_command_sync(
+            cluster_index,
+            CTRL_WORK_MODE,
+            para1=0xFFFF,
+            para2=mode,
+            para3=0xFFFF,
+            timeout_s=1.0,
+            label="工装模式切换",
+            authorize=True,
+        )
+        self._set_factory_status(mode)
+        self.S17.update_snapshot({"work_mode": mode})
+        return mode
+
+
+    def _require_factory_mode_sync(self, cluster_index):
+        mode = self._read_data_u16_sync(cluster_index, VAR_SYS_WORK_MODE, timeout_s=0.8, retries=1)
+        self._set_factory_status(mode)
+        if int(mode) != WORK_MODE_GZ_TEST:
+            raise RuntimeError("当前工装模式未开启，请先点击顶部“工装开”。")
+        return mode
+
+
+    def _run_host_control_action(self, action, error_title="主机控制失败", revert=None):
+        if not self._host_control_ready():
+            if callable(revert):
+                revert()
+            return False
+        active_timers = self._pause_history_log_timers()
+        try:
+            self._flush_diag_rx()
+            action()
+            return True
+        except Exception as exc:
+            if callable(revert):
+                revert()
+            self.S17.set_status_text(str(exc), failed=True)
+            QMessageBox.critical(self, error_title, str(exc))
+            return False
+        finally:
+            self._resume_history_log_timers(active_timers)
+
+
+    def _refresh_host_control_snapshot(self, show_status=False):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            self.S17.update_snapshot({})
+            self._set_factory_status(None)
+            return
+        if self._active_cluster_index() <= 0:
+            self.S17.update_snapshot({})
+            self._set_factory_status(None)
+            return
+
+        cluster_index = self._active_cluster_index()
+
+        def action():
+            snapshot = {}
+            reads = (
+                ("work_mode", VAR_SYS_WORK_MODE),
+                ("soc", VAR_SYS_SOC),
+                ("hvil_pwm_freq", PAR_SYS_OUTPUT_HVIL_FREQ),
+                ("hvil_pwm_duty", PAR_SYS_OUTPUT_HVIL_DUTY_RATIO),
+            )
+            for key, data_id in reads:
+                try:
+                    snapshot[key] = self._read_data_u16_sync(cluster_index, data_id, timeout_s=0.5, retries=0)
+                except Exception:
+                    snapshot[key] = None
+
+            relay_states = []
+            for data_id in range(48, 58):
+                try:
+                    relay_states.append(bool(self._read_data_u16_sync(cluster_index, data_id, timeout_s=0.25, retries=0)))
+                except Exception:
+                    relay_states.append(False)
+            snapshot["relay_states"] = relay_states
+
+            self.S17.update_snapshot(snapshot)
+            self._set_factory_status(snapshot.get("work_mode"))
+            if show_status:
+                self.S17.set_status_text(f"簇{cluster_index} ({self.selected_cluster_address}) 主机控制状态已刷新。")
+
+        self._run_host_control_action(action, "刷新主机控制状态失败")
+
+
+    def on_factory_mode_change(self, enabled):
+        def action():
+            mode = self._set_factory_mode_sync(self._active_cluster_index(), enabled)
+            state_text = "开" if int(mode) == WORK_MODE_GZ_TEST else "关"
+            self.S17.set_status_text(f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) 工装模式已切换为 {state_text}。")
+
+        self._run_host_control_action(action, "工装模式切换失败")
+
+
+    def on_host_control_read_indexes(self):
+        def action():
+            request_indexes = self.S17.get_request_indexes()
+            read_count = 0
+            error_count = 0
+            for row_index, data_id in enumerate(request_indexes):
+                if data_id is None:
+                    self.S17.set_request_value(row_index, None, "")
+                    continue
+                try:
+                    value = self._read_data_u16_sync(self._active_cluster_index(), data_id, timeout_s=0.8, retries=1)
+                    self.S17.set_request_value(row_index, data_id, str(value))
+                    read_count += 1
+                except Exception:
+                    self.S17.set_request_value(row_index, data_id, "ERR")
+                    error_count += 1
+            self.S17.set_status_text(
+                f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) 索引读取完成，成功 {read_count} 项，失败 {error_count} 项。"
+            )
+
+        try:
+            self.S17.get_request_indexes()
+        except ValueError as exc:
+            QMessageBox.warning(self, "索引输入错误", str(exc))
+            return
+        self._run_host_control_action(action, "索引读取失败")
+
+
+    def on_host_control_write_indexes(self):
+        try:
+            write_entries = self.S17.get_request_write_entries()
+        except ValueError as exc:
+            QMessageBox.warning(self, "索引输入错误", str(exc))
+            return
+        if not write_entries:
+            QMessageBox.warning(self, "没有可写入的索引值", "请先填写至少一项索引值后再写入。")
+            return
+
+        def action():
+            self._require_factory_mode_sync(self._active_cluster_index())
+            write_count = 0
+            error_count = 0
+            for row_index, data_id, value in write_entries:
+                try:
+                    self._write_data_u16_sync(self._active_cluster_index(), data_id, value, timeout_s=1.0)
+                    self.S17.set_request_value(row_index, data_id, self.S17.index_value_edits[row_index].text().strip())
+                    write_count += 1
+                except Exception:
+                    error_count += 1
+            self.S17.set_status_text(
+                f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) 索引写入完成，成功 {write_count} 项，失败 {error_count} 项。"
+            )
+
+        self._run_host_control_action(action, "索引写入失败")
+
+
+    def on_host_control_channel_toggled(self, channel_id, checked):
+        checkbox = self.S17.channel_checks[channel_id]
+
+        def revert():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(not checked)
+            checkbox.blockSignals(False)
+
+        def action():
+            self._require_factory_mode_sync(self._active_cluster_index())
+            self._execute_control_command_sync(
+                self._active_cluster_index(),
+                CTRL_CHNNEL,
+                para1=int(channel_id),
+                para2=1 if checked else 0,
+                timeout_s=1.0,
+                label=f"{checkbox.text()} 输出控制",
+                authorize=True,
+            )
+            state_text = "合" if checked else "断"
+            self.S17.set_status_text(
+                f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) {checkbox.text()} 已切换为 {state_text}。"
+            )
+
+        self._run_host_control_action(action, "输出控制失败", revert=revert)
+
+
+    def on_host_control_write_hvil(self):
+        freq = self.S17.hvil_freq_target.value()
+        duty = self.S17.hvil_duty_target.value()
+
+        def action():
+            self._require_factory_mode_sync(self._active_cluster_index())
+            self._write_data_u16_sync(self._active_cluster_index(), PAR_SYS_OUTPUT_HVIL_FREQ, freq, timeout_s=1.0)
+            self._write_data_u16_sync(self._active_cluster_index(), PAR_SYS_OUTPUT_HVIL_DUTY_RATIO, duty, timeout_s=1.0)
+            self.S17.hvil_freq_current.setText(f"{freq / 10:.1f} Hz")
+            self.S17.hvil_duty_current.setText(f"{duty / 10:.1f} %")
+            self.S17.set_status_text(
+                f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) HVIL PWM 已写入，频率 {freq}，占空比 {duty}。"
+            )
+
+        self._run_host_control_action(action, "HVIL PWM写入失败")
+
+
+    def on_host_control_write_soc(self):
+        soc_value = self.S17.soc_target.value()
+
+        def action():
+            self._require_factory_mode_sync(self._active_cluster_index())
+            self._write_data_u16_sync(self._active_cluster_index(), VAR_SYS_USER_SET_SOC, soc_value, timeout_s=1.0)
+            self.S17.soc_current.setText(f"{soc_value / 10:.1f} %")
+            self.S17.set_status_text(f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) SOC 已写入 {soc_value}。")
+
+        self._run_host_control_action(action, "SOC写入失败")
+
+
+    def on_host_control_restore_factory(self):
+        self._run_host_para_command(
+            CTRL_PARA_CONFIG_RESET_FACTORY,
+            "恢复全站出厂参数",
+            "已恢复全站出厂参数。",
+        )
+
+
+    def on_host_control_restore_run(self):
+        self._run_host_para_command(
+            CTRL_PARA_CONFIG_RESET_RUN,
+            "恢复全局运行参数",
+            "已恢复全局运行参数。",
+        )
+
+
+    def on_host_control_restore_product_info(self):
+        self._run_host_para_command(
+            CTRL_PARA_CONFIG_RESET_PRODUCT_INFO,
+            "恢复产品信息",
+            "已恢复产品信息。",
+        )
+
+
+    def on_host_control_save_flash(self):
+        self._run_host_para_command(
+            CTRL_PARA_CONFIG_SAVE_ALL_TO_FLASH,
+            "保存参数到FLASH",
+            "参数已保存到FLASH。",
+        )
+
+
+    def _run_host_para_command(self, para2, title, success_text):
+        def action():
+            self._require_factory_mode_sync(self._active_cluster_index())
+            self._execute_control_command_sync(
+                self._active_cluster_index(),
+                CTRL_PARA_CONFIG,
+                para2=int(para2),
+                timeout_s=1.2,
+                label=title,
+                authorize=True,
+            )
+            self.S17.set_status_text(f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) {success_text}")
+
+        self._run_host_control_action(action, f"{title}失败")
+
+
+    def on_host_control_sync_time(self):
+        def action():
+            current_time = datetime.now()
+            weekday = current_time.isoweekday() % 7
+            payload = bytes(
+                (
+                    max(current_time.year - 2000, 0) & 0xFF,
+                    current_time.month & 0xFF,
+                    current_time.day & 0xFF,
+                    current_time.hour & 0xFF,
+                    current_time.minute & 0xFF,
+                    current_time.second & 0xFF,
+                    weekday & 0xFF,
+                    0,
+                )
+            )
+            expected_id = self._diag_response_id(self._active_cluster_index(), RESP_SET_TIME)
+            self._send_diag_request(self._active_cluster_index(), CMD_SET_TIME, payload, "同步系统时间")
+            frame = self._wait_diag_frame(
+                expected_id,
+                lambda frame: len(frame.data) >= 7 and frame.data[:6] == payload[:6],
+                1.0,
+                "同步系统时间",
+            )
+            if not frame.data[6]:
+                raise RuntimeError("同步系统时间被下位机拒绝")
+            self.S17.set_status_text(
+                f"簇{self._active_cluster_index()} ({self.selected_cluster_address}) 系统时间已同步到 {current_time:%Y-%m-%d %H:%M:%S}。"
+            )
+
+        self._run_host_control_action(action, "同步系统时间失败")
 
 
     def _stop_can_timers(self):
@@ -721,12 +1295,23 @@ class Edit(Ui_Form, QWidget):
 
 
 
-        self.S17.pushButton_10.clicked.connect(self.ForceChargeOpen)
         self.timer_Forcecharge = QTimer(self)
         self.timer_Forcecharge.timeout.connect(self.ForceChargeOpenClose)
         #self.timer_Forcecharge.start(1)
 
-        self.S17.pushButton.clicked.connect(self.WordMode)
+        self.S17.read_indexes_button.clicked.connect(self.on_host_control_read_indexes)
+        self.S17.write_indexes_button.clicked.connect(self.on_host_control_write_indexes)
+        self.S17.write_hvil_button.clicked.connect(self.on_host_control_write_hvil)
+        self.S17.write_soc_button.clicked.connect(self.on_host_control_write_soc)
+        self.S17.restore_product_info_button.clicked.connect(self.on_host_control_restore_product_info)
+        self.S17.sync_time_button.clicked.connect(self.on_host_control_sync_time)
+        self.S17.restore_run_button.clicked.connect(self.on_host_control_restore_run)
+        self.S17.restore_factory_button.clicked.connect(self.on_host_control_restore_factory)
+        self.S17.save_flash_button.clicked.connect(self.on_host_control_save_flash)
+        for channel_id, checkbox in self.S17.channel_checks.items():
+            checkbox.toggled.connect(
+                lambda checked, channel_id=channel_id: self.on_host_control_channel_toggled(channel_id, checked)
+            )
         self.S21.button.clicked.connect(self.on_alarm_parameter_read)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
@@ -737,20 +1322,6 @@ class Edit(Ui_Form, QWidget):
         self._connect_cluster_page_selectors()
 
 
-        #BAU通道控制
-        #使能
-        self.S17.pushButton_11.clicked.connect(self.ChanlCtrlBAUEnable)
-        #禁止
-        self.S17.pushButton_12.clicked.connect(self.ChanlCtrlBAUDisEnable)
-
-        #BCU通道控制
-        self.S17.pushButton_13.clicked.connect(self.ChanlCtrlBCUEnable)
-        self.S17.pushButton_14.clicked.connect(self.ChanlCtrlBCUDisEnable)
-
-
-        #均衡控制
-        self.S17.pushButton_2.clicked.connect(self.BALANCECtrl)
-        self.S17.pushButton_3.clicked.connect(self.BALANCECtrlClose)
         self.S25.moduleApplyRequested.connect(self.on_balance_control_apply)
         self.S25.moduleCloseRequested.connect(self.on_balance_control_close_module)
         self.S25.allCloseRequested.connect(self.on_balance_control_close_all)
@@ -775,7 +1346,7 @@ class Edit(Ui_Form, QWidget):
 
         self.S21.submit_button.clicked.connect(self.on_alarm_parameter_save_flash)
 
-        self.FLAG_WORK_MODE = 0
+        self.FLAG_WORK_MODE = 1
 
 
         #修改告警槽函数
@@ -879,6 +1450,8 @@ class Edit(Ui_Form, QWidget):
                 self._set_active_cluster(default_cluster_index, refresh=False, source="tab")
         else:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
+            if index == self._control_tab_index():
+                self._refresh_host_control_snapshot(show_status=True)
 
 
 
