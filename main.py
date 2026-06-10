@@ -280,43 +280,43 @@ class Edit(Ui_Form, QWidget):
 
 
     def _control_tab_index(self):
-        return config["BCU_NUM"] + 2
+        return -1
 
 
     def _voltage_tab_index(self):
-        return config["BCU_NUM"] + 3
+        return config["BCU_NUM"] + 2
 
 
     def _balance_tab_index(self):
-        return config["BCU_NUM"] + 4
+        return config["BCU_NUM"] + 3
 
 
     def _temperature_tab_index(self):
-        return config["BCU_NUM"] + 5
+        return config["BCU_NUM"] + 4
 
 
     def _alarm_tab_index(self):
-        return config["BCU_NUM"] + 6
+        return config["BCU_NUM"] + 5
 
 
     def _di_tab_index(self):
-        return config["BCU_NUM"] + 7
+        return -1
 
 
     def _parameter_tab_index(self):
-        return config["BCU_NUM"] + 8
+        return -1
 
 
     def _abnormal_cell_tab_index(self):
-        return config["BCU_NUM"] + 9
+        return config["BCU_NUM"] + 6
 
 
     def _balance_control_tab_index(self):
-        return config["BCU_NUM"] + 10
+        return config["BCU_NUM"] + 7
 
 
     def _history_log_tab_index(self):
-        return config["BCU_NUM"] + 11
+        return config["BCU_NUM"] + 8
 
 
     def _valid_cluster_indices(self):

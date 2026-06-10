@@ -164,11 +164,17 @@ class Ui_Form(object):
         self.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+10)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+7)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.label = [list(row) for row in zip(*self.label)]#转置
+        self._hidden_control_page = QtWidgets.QWidget(Form)
+        self._hidden_di_page = QtWidgets.QWidget(Form)
+        self._hidden_parameter_page = QtWidgets.QWidget(Form)
+        self._hidden_control_page.hide()
+        self._hidden_di_page.hide()
+        self._hidden_parameter_page.hide()
         self.S17 = UI24()
         self.S18 = UI25()
         self.S19 = UI26()
@@ -180,31 +186,31 @@ class Ui_Form(object):
         self.S25 = UI32()
         self.S26 = UI33()
 
-        self.S17.setupUi(self.tab[CU_NUM])
+        self.S17.setupUi(self._hidden_control_page)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+1])
+        layout = QVBoxLayout(self.tab[CU_NUM])
         layout.addWidget(self.S18)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+2])
+        layout = QVBoxLayout(self.tab[CU_NUM+1])
         layout.addWidget(self.S19)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+3])
+        layout = QVBoxLayout(self.tab[CU_NUM+2])
         layout.addWidget(self.S20)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+4])
+        layout = QVBoxLayout(self.tab[CU_NUM+3])
         layout.addWidget(self.S21)
 
-        self.S22.setupUi(self.tab[CU_NUM+5])
+        self.S22.setupUi(self._hidden_di_page)
 
-        self.S23.setupUi(self.tab[CU_NUM+6])
+        self.S23.setupUi(self._hidden_parameter_page)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+7])
+        layout = QVBoxLayout(self.tab[CU_NUM+4])
         layout.addWidget(self.S24)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+8])
+        layout = QVBoxLayout(self.tab[CU_NUM+5])
         layout.addWidget(self.S25)
 
-        layout = QVBoxLayout(self.tab[CU_NUM+9])
+        layout = QVBoxLayout(self.tab[CU_NUM+6])
         layout.addWidget(self.S26)
 
 
@@ -240,7 +246,7 @@ class Ui_Form(object):
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
 
-        for i in range(0,CU_NUM+10):
+        for i in range(0,CU_NUM+7):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
             self.tabWidget.tabBar().setTabVisible(0, False)
@@ -275,16 +281,13 @@ class Ui_Form(object):
             self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[i]),"簇"+str(i))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[0]), "00")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM-1]), "BAU")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM]), "主机控制")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+1]), "单体电压")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+2]), "均衡")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "单体温度")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "告警")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "DI状态")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "参数管理")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 7]), "电芯异常")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 8]), "均衡控制")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 9]), "历史日志")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM]), "单体电压")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+1]), "均衡")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+2]), "单体温度")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "告警")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "电芯异常")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "均衡控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "历史日志")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 
