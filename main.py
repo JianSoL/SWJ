@@ -141,6 +141,8 @@ def load_can_board_config(file_name="config.json"):
 
 class Edit(Ui_Form, QWidget):
     DEFAULT_CLUSTER_ADDRESS = "A0"
+    ZERO_TAB_INDEX = 0
+    CLUSTER_TAB_INDEX = 1
 
     # 定义初始化进程
     def __init__(self):
@@ -271,8 +273,52 @@ class Edit(Ui_Form, QWidget):
         return f"簇{cluster_index} ({address})" if address else f"簇{cluster_index}"
 
 
+    def _active_cluster_index(self):
+        return int(getattr(self, "selected_cluster_index", 0))
+
+
+    def _current_bau_tab_index(self):
+        return config["BCU_NUM"] + 1
+
+
+    def _control_tab_index(self):
+        return config["BCU_NUM"] + 2
+
+
+    def _voltage_tab_index(self):
+        return config["BCU_NUM"] + 3
+
+
+    def _balance_tab_index(self):
+        return config["BCU_NUM"] + 4
+
+
+    def _temperature_tab_index(self):
+        return config["BCU_NUM"] + 5
+
+
+    def _alarm_tab_index(self):
+        return config["BCU_NUM"] + 6
+
+
+    def _di_tab_index(self):
+        return config["BCU_NUM"] + 7
+
+
+    def _parameter_tab_index(self):
+        return config["BCU_NUM"] + 8
+
+
+    def _abnormal_cell_tab_index(self):
+        return config["BCU_NUM"] + 9
+
+
     def _valid_cluster_indices(self):
         return {cluster_index for cluster_index, _address in getattr(self, "cluster_options", [])}
+
+
+    def _is_hidden_cluster_tab_index(self, tab_index):
+        return self.CLUSTER_TAB_INDEX < tab_index <= config["BCU_NUM"]
 
 
     def _set_combo_index_safely(self, combo, index):
@@ -336,6 +382,39 @@ class Edit(Ui_Form, QWidget):
                 combo.currentIndexChanged.connect(self.on_embedded_cluster_changed)
 
 
+    def _hide_widget(self, widget):
+        if widget is not None:
+            widget.hide()
+
+
+    def _hide_embedded_cluster_controls(self):
+        self._hide_widget(getattr(self.S17, "label_11", None))
+        self._hide_widget(getattr(self.S17, "frame_5", None))
+        self._hide_widget(getattr(self.S17, "comboBox_13", None))
+        self._hide_widget(getattr(self.S21, "cluster_caption", None))
+        self._hide_widget(getattr(self.S21, "comboBox", None))
+        self._hide_widget(getattr(self.S21, "cluster_label", None))
+        self._hide_widget(getattr(self.S22, "comboBox", None))
+        self._hide_widget(getattr(self.S23, "frame_6", None))
+        self._hide_widget(getattr(self.S23, "comboBox", None))
+        self._hide_widget(getattr(self.S18, "comboBox", None))
+        self._hide_widget(getattr(self.S19, "comboBox", None))
+        self._hide_widget(getattr(self.S20, "comboBox", None))
+        self._hide_widget(getattr(self.S24, "comboBox", None))
+
+
+    def _configure_single_cluster_tab(self):
+        if not hasattr(self, "tabWidget"):
+            return
+        if self.tabWidget.count() > self.CLUSTER_TAB_INDEX:
+            self.tabWidget.setTabText(self.CLUSTER_TAB_INDEX, "簇")
+        tab_bar = self.tabWidget.tabBar()
+        if hasattr(tab_bar, "setTabVisible"):
+            for tab_index in range(self.CLUSTER_TAB_INDEX + 1, config["BCU_NUM"] + 1):
+                if tab_index < self.tabWidget.count():
+                    tab_bar.setTabVisible(tab_index, False)
+
+
     def _reset_cluster_query_cursors(self):
         for attr_name in (
             "BAL_index",
@@ -357,12 +436,20 @@ class Edit(Ui_Form, QWidget):
         Alarm_list = [[0 for _ in range(32)] for _ in range(64)]
 
 
+    def _clear_current_cluster_tables(self):
+        if not hasattr(self, "TW") or self.CLUSTER_TAB_INDEX >= len(self.TW):
+            return
+        for table in self.TW[self.CLUSTER_TAB_INDEX]:
+            table.clearContents()
+
+
     def _refresh_cluster_views(self, source=None):
         self._clear_cluster_buffers()
+        self._clear_current_cluster_tables()
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
         self.S20currentIndexChangedTem()
-        if getattr(self, "table_index", None) == config["BCU_NUM"] + 6 and source != "alarm_page":
+        if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
             if getattr(self, "can_ready", False):
@@ -393,10 +480,10 @@ class Edit(Ui_Form, QWidget):
                 source in ("top", "init")
                 and hasattr(self, "tabWidget")
                 and getattr(self, "table_index", 0) <= config["BCU_NUM"]
-                and cluster_index <= config["BCU_NUM"]
             ):
-                self.tabWidget.setCurrentIndex(cluster_index)
-                self.table_index = cluster_index
+                target_tab_index = self.ZERO_TAB_INDEX if cluster_index == 0 else self.CLUSTER_TAB_INDEX
+                self.tabWidget.setCurrentIndex(target_tab_index)
+                self.table_index = target_tab_index
 
             if previous_index != cluster_index:
                 self._reset_cluster_query_cursors()
@@ -577,6 +664,8 @@ class Edit(Ui_Form, QWidget):
         self._cluster_syncing = False
         self._setup_product_controls()
         self._load_bus_config_controls(load_can_board_config())
+        self._configure_single_cluster_tab()
+        self._hide_embedded_cluster_controls()
         self._set_bus_status(False, "CAN: 未连接", "warning")
         self._update_rx_status()
 
@@ -756,11 +845,19 @@ class Edit(Ui_Form, QWidget):
     def on_tab_changed(self, index):
         # 触发的函数：根据选中的标签页输出信息
         print(f"当前选中的标签页索引: {index}")
+        if self._is_hidden_cluster_tab_index(index):
+            self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
+            return
         self.table_index = index
-        if index <= config["BCU_NUM"]:
+        if index == self.ZERO_TAB_INDEX:
             self._set_active_cluster(index, refresh=False, source="tab")
+        elif index == self.CLUSTER_TAB_INDEX:
+            if self._active_cluster_index() == 0:
+                default_option_index = self._default_cluster_option_index()
+                default_cluster_index = self.cluster_options[default_option_index][0]
+                self._set_active_cluster(default_cluster_index, refresh=False, source="tab")
         else:
-            self._sync_page_cluster_combo_boxes(getattr(self, "selected_cluster_index", 0))
+            self._sync_page_cluster_combo_boxes(self._active_cluster_index())
 
 
 
@@ -812,93 +909,96 @@ class Edit(Ui_Form, QWidget):
                 #     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 #     if ((bauvarid == 0x9040D) and (config["Has_N"])==255):
                 #         config["Has_N"] = byte4 + byte5 * 256
+                if index > 0 and index != self._active_cluster_index():
+                    continue
                 addr = config["ADDRESLIST"][index]
+                display_index = self.ZERO_TAB_INDEX if index == 0 else self.CLUSTER_TAB_INDEX
                 if index-1<config["BCU_NUM"]:
 
                     #带中线
                     if config["Has_N"]==1:
-                        STIID("0x1201ef"+addr,ID,self.TW[index][0], 0, "霍尔电流", str(Unsignal_Change(byte3* 256+byte2)/10), "A",self.ResDataRec[index],0)
-                        STIID("0x1201ef"+addr,ID,self.TW[index][0], 1, "B端电压", str((byte1* 256 + byte0 )/10), "V",self.ResDataRec[index],0)
-                        STIID("0x1201ef"+addr,ID,self.TW[index][0], 2, "P端电压", str((byte7 * 256 + byte6) / 10), "V",self.ResDataRec[index],0)
-                        STIID("0x1201ef"+addr,ID,self.TW[index][0], 3, "运行状态", str((byte4)), "0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ",self.ResDataRec[index],0)
-                        STIID("0x1202EF"+addr,ID,self.TW[index][0],4,"SOC",str((byte7 * 256 + byte6)),"0.1%",self.ResDataRec[index],0)
-                        STIID("0x1203EF"+addr,ID,self.TW[index][0],5,"最大单体电压",str((byte3* 256+byte2)),"mv",self.ResDataRec[index],0)
-                        STIID("0x1203EF"+addr, ID, self.TW[index][0], 6, "最小单体电压", str((byte7 * 256 + byte6)), "mv",self.ResDataRec[index],0)
-                        STIID("0x120CEF"+addr, ID, self.TW[index][0], 7, "充电继电器", str(byte2&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
-                        STIID("0x120CEF"+addr, ID, self.TW[index][0], 8, "放电继电器", str(byte2>>4 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
-                        STIID("0x1228EF"+addr, ID, self.TW[index][0], 9, "最严重告警等级", str((byte1* 256 + byte0 )&0xFF), "",self.ResDataRec[index],0)
+                        STIID("0x1201ef"+addr,ID,self.TW[display_index][0], 0, "霍尔电流", str(Unsignal_Change(byte3* 256+byte2)/10), "A",self.ResDataRec[index],0)
+                        STIID("0x1201ef"+addr,ID,self.TW[display_index][0], 1, "B端电压", str((byte1* 256 + byte0 )/10), "V",self.ResDataRec[index],0)
+                        STIID("0x1201ef"+addr,ID,self.TW[display_index][0], 2, "P端电压", str((byte7 * 256 + byte6) / 10), "V",self.ResDataRec[index],0)
+                        STIID("0x1201ef"+addr,ID,self.TW[display_index][0], 3, "运行状态", str((byte4)), "0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ",self.ResDataRec[index],0)
+                        STIID("0x1202EF"+addr,ID,self.TW[display_index][0],4,"SOC",str((byte7 * 256 + byte6)),"0.1%",self.ResDataRec[index],0)
+                        STIID("0x1203EF"+addr,ID,self.TW[display_index][0],5,"最大单体电压",str((byte3* 256+byte2)),"mv",self.ResDataRec[index],0)
+                        STIID("0x1203EF"+addr, ID, self.TW[display_index][0], 6, "最小单体电压", str((byte7 * 256 + byte6)), "mv",self.ResDataRec[index],0)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 7, "充电继电器", str(byte2&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 8, "放电继电器", str(byte2>>4 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
+                        STIID("0x1228EF"+addr, ID, self.TW[display_index][0], 9, "最严重告警等级", str((byte1* 256 + byte0 )&0xFF), "",self.ResDataRec[index],0)
 
                         if (byte0)==index:
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][0], 10, "BAU控制命令", str(byte4), "",self.ResDataRec[index],0)
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][0], 11, "BCU地址", str(byte0), "",self.ResDataRec[index],0)
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][0], 12, "是否强充", str(byte1), "",self.ResDataRec[index],0)
-                        STIID("0x1207EF"+addr, ID, self.TW[index][0], 13, "最大允许充电电流", str((byte1* 256 + byte0 )/10), "A",self.ResDataRec[index],0)
-                        STIID("0x1207EF"+addr, ID, self.TW[index][0], 14, "最大允许放电电流", str((byte3* 256 + byte2 )/10), "A",self.ResDataRec[index],0)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][0], 10, "BAU控制命令", str(byte4), "",self.ResDataRec[index],0)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][0], 11, "BCU地址", str(byte0), "",self.ResDataRec[index],0)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][0], 12, "是否强充", str(byte1), "",self.ResDataRec[index],0)
+                        STIID("0x1207EF"+addr, ID, self.TW[display_index][0], 13, "最大允许充电电流", str((byte1* 256 + byte0 )/10), "A",self.ResDataRec[index],0)
+                        STIID("0x1207EF"+addr, ID, self.TW[display_index][0], 14, "最大允许放电电流", str((byte3* 256 + byte2 )/10), "A",self.ResDataRec[index],0)
 
-                        # STIID("0x18FE10"+addr,ID,self.TW[index][0],15,"MAX_SOC_UP",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE10" + addr, ID, self.TW[index][0], 16, "MIN_SOC_UP", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE10" + addr, ID, self.TW[index][0], 17, "PURE_SOC_UP", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE10" + addr, ID, self.TW[index][0], 18, "REVISE_SOC_UP", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE10"+addr,ID,self.TW[display_index][0],15,"MAX_SOC_UP",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE10" + addr, ID, self.TW[display_index][0], 16, "MIN_SOC_UP", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE10" + addr, ID, self.TW[display_index][0], 17, "PURE_SOC_UP", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE10" + addr, ID, self.TW[display_index][0], 18, "REVISE_SOC_UP", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],0)
                         #
-                        # STIID("0x18FE11"+addr,ID,self.TW[index][0],19,"REVISESOC_TEMP_UP",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE11" + addr, ID, self.TW[index][0], 20, "MIN_SOC_TEMP_UP", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE11" + addr, ID, self.TW[index][0], 21, "MAX_SOC_TEMP_UP", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],0)
-                        # STIID("0x18FE11" + addr, ID, self.TW[index][0], 22, "FUZZY_SOC_UP", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE11"+addr,ID,self.TW[display_index][0],19,"REVISESOC_TEMP_UP",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE11" + addr, ID, self.TW[display_index][0], 20, "MIN_SOC_TEMP_UP", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE11" + addr, ID, self.TW[display_index][0], 21, "MAX_SOC_TEMP_UP", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],0)
+                        # STIID("0x18FE11" + addr, ID, self.TW[display_index][0], 22, "FUZZY_SOC_UP", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],0)
                         # if ((byte0>>7)&0x01==0) and (byte3*256+byte2)!=0x1212 and ((byte3*256+byte2)!=0x1212) and (byte0 !=0xFD) and (byte0 !=0xFE) and (byte0 !=0xFF):
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][0], 23, "告警ID", str(byte0&0x7F), "",self.ResDataRec[index],0)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][0], 24, "告警等级", str(byte1), "",self.ResDataRec[index],0)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][0], 25, "告警阈值", str(byte5 * 256 + byte4), "",self.ResDataRec[index],0)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][0], 26, "告警值", str(byte7 * 256 + byte6), "",self.ResDataRec[index],0)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][0], 23, "告警ID", str(byte0&0x7F), "",self.ResDataRec[index],0)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][0], 24, "告警等级", str(byte1), "",self.ResDataRec[index],0)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][0], 25, "告警阈值", str(byte5 * 256 + byte4), "",self.ResDataRec[index],0)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][0], 26, "告警值", str(byte7 * 256 + byte6), "",self.ResDataRec[index],0)
 
 
 
-                        # STIID("0x18FE17" + addr, ID, self.TW[index][0], 30, "OCVMAXSOC_UP", str(byte1 * 256 + byte0), "OCV矫正最大SOC",self.ResDataRec[index],0)
-                        # STIID("0x18FE17" + addr, ID, self.TW[index][0], 31, "OCVMINSOC_UP", str(byte3 * 256 + byte2), "OCV矫正最小SOC",self.ResDataRec[index],0)
-                        # STIID("0x18FE17" + addr, ID, self.TW[index][0], 32, "OCV_UPDT_COUNT_UP", str(byte4), "OCV更新次数",self.ResDataRec[index],0)
-                        # STIID("0x18FE17" + addr, ID, self.TW[index][0], 33, "OCV_FAIL_CODE_UP", str(byte5), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。",self.ResDataRec,0)
-                        #STIID("0x18FE17" + addr, ID, self.TW[index][0], 34, "FULL_CHRG_FLG_UP", str(byte6),"满充满放标志，0-默认；1-满充；",self.ResDataRec[index],0)
+                        # STIID("0x18FE17" + addr, ID, self.TW[display_index][0], 30, "OCVMAXSOC_UP", str(byte1 * 256 + byte0), "OCV矫正最大SOC",self.ResDataRec[index],0)
+                        # STIID("0x18FE17" + addr, ID, self.TW[display_index][0], 31, "OCVMINSOC_UP", str(byte3 * 256 + byte2), "OCV矫正最小SOC",self.ResDataRec[index],0)
+                        # STIID("0x18FE17" + addr, ID, self.TW[display_index][0], 32, "OCV_UPDT_COUNT_UP", str(byte4), "OCV更新次数",self.ResDataRec[index],0)
+                        # STIID("0x18FE17" + addr, ID, self.TW[display_index][0], 33, "OCV_FAIL_CODE_UP", str(byte5), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。",self.ResDataRec,0)
+                        #STIID("0x18FE17" + addr, ID, self.TW[display_index][0], 34, "FULL_CHRG_FLG_UP", str(byte6),"满充满放标志，0-默认；1-满充；",self.ResDataRec[index],0)
 
-                        STIID("0x18FE14" + addr, ID, self.TW[index][0], 35, "TOTAL_CHRG_AH", str(byte1 * 256 + byte0), "0.01AH",self.ResDataRec[index],0)
-                        STIID("0x18FE14" + addr, ID, self.TW[index][0], 36, "TOTAL_DSCH_AH", str(byte3 * 256 + byte2),"0.01AH",self.ResDataRec[index],0)
-                        STIID("0x18FE14" + addr, ID, self.TW[index][0], 37, "CHRG_TIMES", str(byte5 * 256 + byte4),"累计充电次数",self.ResDataRec[index],0)
-                        STIID("0x18FE14" + addr, ID, self.TW[index][0], 38, "DSCH_TIMES", str(byte7 * 256 + byte6),"累计放电次数",self.ResDataRec[index],0)
-                        #STIID("0x18FE19" + addr, ID, self.TW[index][0], 39, "满充满放状态", str(byte1 * 256 + byte0),"",self.ResDataRec[index],0)
-                        # STIID("0x18FE20" + addr, ID, self.TW[index][0], 40, "SOC正向追赶速率", str(byte1 * 256 + byte0), "")
-                        # STIID("0x18FE20" + addr, ID, self.TW[index][0], 41, "SOC反向追赶速率", str(byte3 * 256 + byte2), "")
-                        STIID("0x18FE22" + addr, ID, self.TW[index][0], 42, "告警代码", str(byte3 * 256*256*256+byte2 * 256*256+byte1 * 256 + byte0), "",self.ResDataRec[index],0)
+                        STIID("0x18FE14" + addr, ID, self.TW[display_index][0], 35, "TOTAL_CHRG_AH", str(byte1 * 256 + byte0), "0.01AH",self.ResDataRec[index],0)
+                        STIID("0x18FE14" + addr, ID, self.TW[display_index][0], 36, "TOTAL_DSCH_AH", str(byte3 * 256 + byte2),"0.01AH",self.ResDataRec[index],0)
+                        STIID("0x18FE14" + addr, ID, self.TW[display_index][0], 37, "CHRG_TIMES", str(byte5 * 256 + byte4),"累计充电次数",self.ResDataRec[index],0)
+                        STIID("0x18FE14" + addr, ID, self.TW[display_index][0], 38, "DSCH_TIMES", str(byte7 * 256 + byte6),"累计放电次数",self.ResDataRec[index],0)
+                        #STIID("0x18FE19" + addr, ID, self.TW[display_index][0], 39, "满充满放状态", str(byte1 * 256 + byte0),"",self.ResDataRec[index],0)
+                        # STIID("0x18FE20" + addr, ID, self.TW[display_index][0], 40, "SOC正向追赶速率", str(byte1 * 256 + byte0), "")
+                        # STIID("0x18FE20" + addr, ID, self.TW[display_index][0], 41, "SOC反向追赶速率", str(byte3 * 256 + byte2), "")
+                        STIID("0x18FE22" + addr, ID, self.TW[display_index][0], 42, "告警代码", str(byte3 * 256*256*256+byte2 * 256*256+byte1 * 256 + byte0), "",self.ResDataRec[index],0)
 
 
                         if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                             bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
 
                             if bauvarid == 0x354:
-                                STI(self.TW[index][0], 15, str("MAX_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 15, str("MAX_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x34C:
-                                STI(self.TW[index][0], 16, str("MAX_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 16, str("MAX_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x356:
-                                STI(self.TW[index][0], 17, str("MIN_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 17, str("MIN_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x34A:
-                                STI(self.TW[index][0], 18, str("MIN_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 18, str("MIN_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x346:
-                                STI(self.TW[index][0], 19, str("REVSE_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 19, str("REVSE_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x348:
-                                STI(self.TW[index][0], 20, str("REVISE_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 20, str("REVISE_SOC_Temp_UP"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x358:
-                                STI(self.TW[index][0], 21, str("PURE_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 21, str("PURE_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x33C:
-                                STI(self.TW[index][0], 22, str("OCVMAXSOC_UP"),str((byte4 + byte5 * 256)), "OCV矫正最大SOC[0.1%]")
+                                STI(self.TW[display_index][0], 22, str("OCVMAXSOC_UP"),str((byte4 + byte5 * 256)), "OCV矫正最大SOC[0.1%]")
 
                             if bauvarid == 0x33A:
-                                STI(self.TW[index][0], 23, str("OCVMINSOC_UP"),str((byte4 + byte5 * 256)), "OCV矫正最大SOC[0.1%]")
+                                STI(self.TW[display_index][0], 23, str("OCVMINSOC_UP"),str((byte4 + byte5 * 256)), "OCV矫正最大SOC[0.1%]")
 
                             if bauvarid == 0x33E:
-                                STI(self.TW[index][0], 24, str("OCV更新次数"),str((byte4 + byte5 * 256)), "OCVUP_DATA_COUNT_UP")
+                                STI(self.TW[display_index][0], 24, str("OCV更新次数"),str((byte4 + byte5 * 256)), "OCVUP_DATA_COUNT_UP")
 
                             if bauvarid == 0x340:
-                                STI(self.TW[index][0], 25, str("OCV无法原因标志"),str((byte4 + byte5 * 256)), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。")
+                                STI(self.TW[display_index][0], 25, str("OCV无法原因标志"),str((byte4 + byte5 * 256)), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。")
 
 
 
@@ -907,45 +1007,45 @@ class Edit(Ui_Form, QWidget):
 
 
                             if bauvarid == 0x1D2:
-                                STI(self.TW[index][0], 43, str("剩余充电时间"),str((byte4 + byte5 * 256)), "S")
+                                STI(self.TW[display_index][0], 43, str("剩余充电时间"),str((byte4 + byte5 * 256)), "S")
 
                             if bauvarid == 0x1D3:
-                                STI(self.TW[index][0], 44, str("剩余放电时间"),str((byte4 + byte5 * 256)), "S")
+                                STI(self.TW[display_index][0], 44, str("剩余放电时间"),str((byte4 + byte5 * 256)), "S")
 
                             if bauvarid == 0x326:
-                                STI(self.TW[index][0], 45, str("最高温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][0], 45, str("最高温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
                                 self.ResDataRec[index]["最高温度上半簇"] = Unsignal_Change(byte4 + byte5 * 256)
                             if bauvarid == 0x32A:
-                                STI(self.TW[index][0], 46, str("最低温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][0], 46, str("最低温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
                                 self.ResDataRec[index]["最低温度上半簇"] = Unsignal_Change(byte4 + byte5 * 256)
                             if bauvarid == 0x31C:
-                                STI(self.TW[index][0], 47, str("平均温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][0], 47, str("平均温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
                             if bauvarid == 0x1D:
-                                STI(self.TW[index][0], 48, str("SOE"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][0], 48, str("SOE"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
 
                             if bauvarid == 0x20:
-                                STI(self.TW[index][0], 49, str("SOE_Disp"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][0], 49, str("SOE_Disp"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
 
                             if bauvarid == 0x254:
-                                STI(self.TW[index][0], 50, str("剩余可放电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][0], 50, str("剩余可放电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x255:
-                                STI(self.TW[index][0], 51, str("剩余可充电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][0], 51, str("剩余可充电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x1CD:
-                                STI(self.TW[index][0], 52, str("单次充电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][0], 52, str("单次充电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x1CE:
-                                STI(self.TW[index][0], 53, str("单次放电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][0], 53, str("单次放电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x352:
-                                STI(self.TW[index][0], 54, str("OCV置位结果"), str(Unsignal_Change(byte4 + byte5 * 256)),"")
+                                STI(self.TW[display_index][0], 54, str("OCV置位结果"), str(Unsignal_Change(byte4 + byte5 * 256)),"")
 
                             if bauvarid == 0x342:
-                                STI(self.TW[index][0], 55, str("满充满放状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充，2满放")
+                                STI(self.TW[display_index][0], 55, str("满充满放状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充，2满放")
 
                             if bauvarid == 0x334:
-                                STI(self.TW[index][0], 56, str("满充状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充")
+                                STI(self.TW[display_index][0], 56, str("满充状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充")
 
 
 
@@ -954,37 +1054,37 @@ class Edit(Ui_Form, QWidget):
                        # STIID("", ID, self.tableWidget, 6, "放电继电器", str((byte7 * 256 + byte6)), "0断开-1闭合")
                         # # 下半簇
 
-                        STIID("0x1301ef"+addr,ID,self.TW[index][1],0,"分流器电流", str(Unsignal_Change(byte3* 256+byte2)/10), "A",self.ResDataRec[index],1)
-                        STIID("0x1301ef"+addr,ID,self.TW[index][1],1, "B端电压", str((byte1* 256 + byte0 )/10), "V",self.ResDataRec[index],1)
-                        STIID("0x1301ef"+addr, ID, self.TW[index][1], 2, "P端电压", str((byte7 * 256 + byte6) / 10), "V",self.ResDataRec[index],1)
-                        STIID("0x1201ef"+addr, ID, self.TW[index][1], 3, "运行状态", str((byte5)),"0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ",self.ResDataRec[index],1)
-                        STIID("0x1302EF"+addr, ID, self.TW[index][1], 4, "SOC", str((byte7 * 256 + byte6)), "0.1%",self.ResDataRec[index],1)
-                        STIID("0x1206EF"+addr, ID, self.TW[index][1], 5, "最大单体电压", str((byte3* 256+byte2)),"mv",self.ResDataRec[index],1)
-                        STIID("0x1206EF"+addr, ID, self.TW[index][1], 6, "最小单体电压", str((byte5 * 256 + byte4)), "mv",self.ResDataRec[index],1)
-                        STIID("0x120CEF"+addr, ID, self.TW[index][1], 7, "充电继电器", str(byte2>>1&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],1)
-                        STIID("0x120CEF"+addr, ID, self.TW[index][1],8, "放电继电器", str(byte2>>5 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],1)
-                        STIID("0x1228EF"+addr, ID, self.TW[index][1], 9, "最严重告警等级", str((byte3 * 256 + byte2)&0xFF), "",self.ResDataRec[index],1)
+                        STIID("0x1301ef"+addr,ID,self.TW[display_index][1],0,"分流器电流", str(Unsignal_Change(byte3* 256+byte2)/10), "A",self.ResDataRec[index],1)
+                        STIID("0x1301ef"+addr,ID,self.TW[display_index][1],1, "B端电压", str((byte1* 256 + byte0 )/10), "V",self.ResDataRec[index],1)
+                        STIID("0x1301ef"+addr, ID, self.TW[display_index][1], 2, "P端电压", str((byte7 * 256 + byte6) / 10), "V",self.ResDataRec[index],1)
+                        STIID("0x1201ef"+addr, ID, self.TW[display_index][1], 3, "运行状态", str((byte5)),"0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ",self.ResDataRec[index],1)
+                        STIID("0x1302EF"+addr, ID, self.TW[display_index][1], 4, "SOC", str((byte7 * 256 + byte6)), "0.1%",self.ResDataRec[index],1)
+                        STIID("0x1206EF"+addr, ID, self.TW[display_index][1], 5, "最大单体电压", str((byte3* 256+byte2)),"mv",self.ResDataRec[index],1)
+                        STIID("0x1206EF"+addr, ID, self.TW[display_index][1], 6, "最小单体电压", str((byte5 * 256 + byte4)), "mv",self.ResDataRec[index],1)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][1], 7, "充电继电器", str(byte2>>1&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],1)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][1],8, "放电继电器", str(byte2>>5 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],1)
+                        STIID("0x1228EF"+addr, ID, self.TW[display_index][1], 9, "最严重告警等级", str((byte3 * 256 + byte2)&0xFF), "",self.ResDataRec[index],1)
                         if (byte0)==index:
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][1], 10, "BAU控制命令", str(byte5), "",self.ResDataRec[index],1)
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][1], 11, "BCU地址", str(byte0), "",self.ResDataRec[index],1)
-                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[index][1], 12, "是否强充", str(byte1), "",self.ResDataRec[index],1)
-                        STIID("0x1307EF"+addr, ID, self.TW[index][1], 13, "最大允许充电电流", str((byte1* 256 + byte0 )/10), "A",self.ResDataRec[index],1)
-                        STIID("0x1307EF"+addr, ID, self.TW[index][1], 14, "最大允许放电电流", str((byte3* 256 + byte2 )/10), "A",self.ResDataRec[index],1)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][1], 10, "BAU控制命令", str(byte5), "",self.ResDataRec[index],1)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][1], 11, "BCU地址", str(byte0), "",self.ResDataRec[index],1)
+                            STIID("0x12F200"+config["BAUaddr"], ID, self.TW[display_index][1], 12, "是否强充", str(byte1), "",self.ResDataRec[index],1)
+                        STIID("0x1307EF"+addr, ID, self.TW[display_index][1], 13, "最大允许充电电流", str((byte1* 256 + byte0 )/10), "A",self.ResDataRec[index],1)
+                        STIID("0x1307EF"+addr, ID, self.TW[display_index][1], 14, "最大允许放电电流", str((byte3* 256 + byte2 )/10), "A",self.ResDataRec[index],1)
 
-                        # STIID("0x18FE12"+addr,ID,self.TW[index][1],15,"MAX_SOC_DOWN",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE12" + addr, ID, self.TW[index][1], 16, "MIN_SOC_DOWN", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE12" + addr, ID, self.TW[index][1], 17, "PURE_SOC_DOWN", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE12" + addr, ID, self.TW[index][1], 18, "REVISE_SOC_DOWN", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE12"+addr,ID,self.TW[display_index][1],15,"MAX_SOC_DOWN",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE12" + addr, ID, self.TW[display_index][1], 16, "MIN_SOC_DOWN", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE12" + addr, ID, self.TW[display_index][1], 17, "PURE_SOC_DOWN", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE12" + addr, ID, self.TW[display_index][1], 18, "REVISE_SOC_DOWN", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],1)
                         #
-                        # STIID("0x18FE13"+addr,ID,self.TW[index][1],19,"REVISESOC_TEMP_DOWN",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE13" + addr, ID, self.TW[index][1], 20, "MIN_SOC_TEMP_DOWN", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE13" + addr, ID, self.TW[index][1], 21, "MAX_SOC_TEMP_DOWN", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],1)
-                        # STIID("0x18FE13" + addr, ID, self.TW[index][1], 22, "FUZZY_SOC_DOWN", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE13"+addr,ID,self.TW[display_index][1],19,"REVISESOC_TEMP_DOWN",str(byte1* 256 + byte0 ),"0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE13" + addr, ID, self.TW[display_index][1], 20, "MIN_SOC_TEMP_DOWN", str(byte3 * 256 + byte2), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE13" + addr, ID, self.TW[display_index][1], 21, "MAX_SOC_TEMP_DOWN", str(byte5 * 256 + byte4), "0.1%",self.ResDataRec[index],1)
+                        # STIID("0x18FE13" + addr, ID, self.TW[display_index][1], 22, "FUZZY_SOC_DOWN", str(byte7 * 256 + byte6), "0.1%",self.ResDataRec[index],1)
                         # if ((byte0>>7)&0x01==1) and ((byte3*256+byte2)!=0x1212) and (byte0 !=0xFD) and (byte0 !=0xFE) and (byte0 !=0xFF):
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][1], 23, "告警ID", str(byte0&0x7F), "",self.ResDataRec[index],1)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][1], 24, "告警等级", str(byte1), "",self.ResDataRec[index],1)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][1], 25, "告警阈值", str(byte5 * 256 + byte4), "",self.ResDataRec[index],1)
-                        #     STIID("0x1215EF" + addr, ID, self.TW[index][1], 26, "告警值", str(byte7 * 256 + byte6), "",self.ResDataRec[index],1)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][1], 23, "告警ID", str(byte0&0x7F), "",self.ResDataRec[index],1)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][1], 24, "告警等级", str(byte1), "",self.ResDataRec[index],1)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][1], 25, "告警阈值", str(byte5 * 256 + byte4), "",self.ResDataRec[index],1)
+                        #     STIID("0x1215EF" + addr, ID, self.TW[display_index][1], 26, "告警值", str(byte7 * 256 + byte6), "",self.ResDataRec[index],1)
 
 
 
@@ -992,235 +1092,235 @@ class Edit(Ui_Form, QWidget):
 
 
 
-                        # STIID("0x18FE18" + addr, ID, self.TW[index][1], 30, "OCVMAXSOC_DOWN", str(byte1 * 256 + byte0), "OCV矫正最大SOC",self.ResDataRec[index],1)
-                        # STIID("0x18FE18" + addr, ID, self.TW[index][1], 31, "OCVMINSOC_DOWN", str(byte3 * 256 + byte2), "OCV矫正最小SOC",self.ResDataRec[index],1)
-                        # STIID("0x18FE18" + addr, ID, self.TW[index][1], 32, "OCV_UPDT_COUNT_DOWN", str(byte4), "OCV更新次数",self.ResDataRec[index],1)
-                        # STIID("0x18FE18" + addr, ID, self.TW[index][1], 33, "OCV_FAIL_CODE_DOWN", str(byte5), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。",self.ResDataRec[index],1)
-                       # STIID("0x18FE18" + addr, ID, self.TW[index][1], 34, "FULL_CHRG_FLG_DOWN", str(byte6),"满充满放标志，0-默认；1-满充；2-满放",self.ResDataRec[index],1)
+                        # STIID("0x18FE18" + addr, ID, self.TW[display_index][1], 30, "OCVMAXSOC_DOWN", str(byte1 * 256 + byte0), "OCV矫正最大SOC",self.ResDataRec[index],1)
+                        # STIID("0x18FE18" + addr, ID, self.TW[display_index][1], 31, "OCVMINSOC_DOWN", str(byte3 * 256 + byte2), "OCV矫正最小SOC",self.ResDataRec[index],1)
+                        # STIID("0x18FE18" + addr, ID, self.TW[display_index][1], 32, "OCV_UPDT_COUNT_DOWN", str(byte4), "OCV更新次数",self.ResDataRec[index],1)
+                        # STIID("0x18FE18" + addr, ID, self.TW[display_index][1], 33, "OCV_FAIL_CODE_DOWN", str(byte5), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。",self.ResDataRec[index],1)
+                       # STIID("0x18FE18" + addr, ID, self.TW[display_index][1], 34, "FULL_CHRG_FLG_DOWN", str(byte6),"满充满放标志，0-默认；1-满充；2-满放",self.ResDataRec[index],1)
 
-                        STIID("0x18FE15" + addr, ID, self.TW[index][1], 35, "TOTAL_CHRG_AH", str(byte1 * 256 + byte0), "0.01AH",self.ResDataRec[index],1)
-                        STIID("0x18FE15" + addr, ID, self.TW[index][1], 36, "TOTAL_DSCH_AH", str(byte3 * 256 + byte2),"0.01AH",self.ResDataRec[index],1)
-                        STIID("0x18FE15" + addr, ID, self.TW[index][1], 37, "CHRG_TIMES", str(byte5 * 256 + byte4),"累计充电次数",self.ResDataRec[index],1)
-                        STIID("0x18FE15" + addr, ID, self.TW[index][1], 38, "DSCH_TIMES", str(byte7 * 256 + byte6),"累计放电次数",self.ResDataRec[index],1)
-                        #STIID("0x18FE19" + addr, ID, self.TW[index][1], 39, "满充满放状态", str(byte3 * 256 + byte2), "",self.ResDataRec[index],1)
-                        # STIID("0x18FE20" + addr, ID, self.TW[index][1], 40, "SOC正向追赶速率", str(byte5 * 256 + byte4), "")
-                        # STIID("0x18FE20" + addr, ID, self.TW[index][1], 41, "SOC反向追赶速率", str(byte7 * 256 + byte6), "")
-                        STIID("0x18FE22" + addr, ID, self.TW[index][1], 42, "告警代码", str(byte7 * 256*256*256+byte6 * 256*256+byte5 * 256 + byte4), "",self.ResDataRec[index],1)
+                        STIID("0x18FE15" + addr, ID, self.TW[display_index][1], 35, "TOTAL_CHRG_AH", str(byte1 * 256 + byte0), "0.01AH",self.ResDataRec[index],1)
+                        STIID("0x18FE15" + addr, ID, self.TW[display_index][1], 36, "TOTAL_DSCH_AH", str(byte3 * 256 + byte2),"0.01AH",self.ResDataRec[index],1)
+                        STIID("0x18FE15" + addr, ID, self.TW[display_index][1], 37, "CHRG_TIMES", str(byte5 * 256 + byte4),"累计充电次数",self.ResDataRec[index],1)
+                        STIID("0x18FE15" + addr, ID, self.TW[display_index][1], 38, "DSCH_TIMES", str(byte7 * 256 + byte6),"累计放电次数",self.ResDataRec[index],1)
+                        #STIID("0x18FE19" + addr, ID, self.TW[display_index][1], 39, "满充满放状态", str(byte3 * 256 + byte2), "",self.ResDataRec[index],1)
+                        # STIID("0x18FE20" + addr, ID, self.TW[display_index][1], 40, "SOC正向追赶速率", str(byte5 * 256 + byte4), "")
+                        # STIID("0x18FE20" + addr, ID, self.TW[display_index][1], 41, "SOC反向追赶速率", str(byte7 * 256 + byte6), "")
+                        STIID("0x18FE22" + addr, ID, self.TW[display_index][1], 42, "告警代码", str(byte7 * 256*256*256+byte6 * 256*256+byte5 * 256 + byte4), "",self.ResDataRec[index],1)
                         if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                             bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
 
                             if bauvarid == 0x355:
-                                STI(self.TW[index][1], 15, str("MAX_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 15, str("MAX_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x34D:
-                                STI(self.TW[index][1], 16, str("MAX_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 16, str("MAX_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x357:
-                                STI(self.TW[index][1], 17, str("MIN_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 17, str("MIN_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x34B:
-                                STI(self.TW[index][1], 18, str("MIN_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 18, str("MIN_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x347:
-                                STI(self.TW[index][1], 19, str("REVSE_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 19, str("REVSE_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x349:
-                                STI(self.TW[index][1], 20, str("REVISE_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 20, str("REVISE_SOC_Temp_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
                             if bauvarid == 0x359:
-                                STI(self.TW[index][1], 21, str("PURE_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][1], 21, str("PURE_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
 
                             if bauvarid == 0x33D:
-                                STI(self.TW[index][1], 22, str("OCVMAXSOC_UP"), str((byte4 + byte5 * 256)),
+                                STI(self.TW[display_index][1], 22, str("OCVMAXSOC_UP"), str((byte4 + byte5 * 256)),
                                     "OCV矫正最大SOC[0.1%]")
 
                             if bauvarid == 0x33B:
-                                STI(self.TW[index][1], 23, str("OCVMINSOC_UP"), str((byte4 + byte5 * 256)),
+                                STI(self.TW[display_index][1], 23, str("OCVMINSOC_UP"), str((byte4 + byte5 * 256)),
                                     "OCV矫正最大SOC[0.1%]")
 
                             if bauvarid == 0x33F:
-                                STI(self.TW[index][1], 24, str("OCV更新次数"), str((byte4 + byte5 * 256)),
+                                STI(self.TW[display_index][1], 24, str("OCV更新次数"), str((byte4 + byte5 * 256)),
                                     "OCVUP_DATA_COUNT_UP")
 
                             if bauvarid == 0x341:
-                                STI(self.TW[index][1], 25, str("OCV无法原因标志"), str((byte4 + byte5 * 256)),
+                                STI(self.TW[display_index][1], 25, str("OCV无法原因标志"), str((byte4 + byte5 * 256)),
                                     "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。")
 
                             if bauvarid == 0x1D4:
-                                STI(self.TW[index][1], 43, str("剩余充电时间"),str((byte4 + byte5 * 256)), "S")
+                                STI(self.TW[display_index][1], 43, str("剩余充电时间"),str((byte4 + byte5 * 256)), "S")
 
                             if bauvarid == 0x1D5:
-                                STI(self.TW[index][1], 44, str("剩余放电时间"),str((byte4 + byte5 * 256)), "S")
+                                STI(self.TW[display_index][1], 44, str("剩余放电时间"),str((byte4 + byte5 * 256)), "S")
 
                             if bauvarid == 0x327:
-                                STI(self.TW[index][1], 45, str("最高温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][1], 45, str("最高温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
                                 self.ResDataRec[index]["最高温度下半簇"] = Unsignal_Change(byte4 + byte5 * 256)
                             if bauvarid == 0x32B:
-                                STI(self.TW[index][1], 46, str("最低温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][1], 46, str("最低温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
                                 self.ResDataRec[index]["最低温度下半簇"] = Unsignal_Change(byte4 + byte5 * 256)
                             if bauvarid == 0x31D:
-                                STI(self.TW[index][1], 47, str("平均温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
+                                STI(self.TW[display_index][1], 47, str("平均温度"), str(Unsignal_Change(byte4 + byte5 * 256)), "0.1℃")
 
                             if bauvarid == 0x1E:
-                                STI(self.TW[index][1], 48, str("SOE"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][1], 48, str("SOE"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
 
                             if bauvarid == 0x21:
-                                STI(self.TW[index][1], 49, str("SOE_Disp"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][1], 49, str("SOE_Disp"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.1%")
 
                             if bauvarid == 0x256:
-                                STI(self.TW[index][1], 50, str("剩余可放电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][1], 50, str("剩余可放电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x257:
-                                STI(self.TW[index][1], 51, str("剩余可充电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][1], 51, str("剩余可充电"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x1CF:
-                                STI(self.TW[index][1], 52, str("单次充电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][1], 52, str("单次充电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x1D0:
-                                STI(self.TW[index][1], 53, str("单次放电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
+                                STI(self.TW[display_index][1], 53, str("单次放电电量"), str(Unsignal_Change(byte4 + byte5 * 256)),"0.01KWH")
 
                             if bauvarid == 0x353:
-                                STI(self.TW[index][1], 54, str("OCV置位结果"), str(Unsignal_Change(byte4 + byte5 * 256)),"")
+                                STI(self.TW[display_index][1], 54, str("OCV置位结果"), str(Unsignal_Change(byte4 + byte5 * 256)),"")
 
                             if bauvarid == 0x343:
-                                STI(self.TW[index][1], 55, str("满充满放状态"),str(Unsignal_Change(byte4 + byte5 * 256)), "0-默认，1-满充，2满放")
+                                STI(self.TW[display_index][1], 55, str("满充满放状态"),str(Unsignal_Change(byte4 + byte5 * 256)), "0-默认，1-满充，2满放")
 
                             if bauvarid == 0x335:
-                                STI(self.TW[index][1], 56, str("满充状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充")
+                                STI(self.TW[display_index][1], 56, str("满充状态"), str(Unsignal_Change(byte4 + byte5 * 256)),"0-默认，1-满充")
 
                     #不带中线
                     else:
-                        STIID("0x120CEF"+addr, ID, self.TW[index][0], 7, "充电继电器", str(byte2&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
-                        STIID("0x120CEF"+addr, ID, self.TW[index][0], 8, "放电继电器", str(byte2>>4 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 7, "充电继电器", str(byte2&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
+                        STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 8, "放电继电器", str(byte2>>4 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
                         if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                             bcuvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
 
                             if bcuvarid == 0xE:
-                                STI(self.TW[index][0], 0, str("系统电流"),str((Unsignal_Change(byte4 + byte5 * 256))/10), "A")
+                                STI(self.TW[display_index][0], 0, str("系统电流"),str((Unsignal_Change(byte4 + byte5 * 256))/10), "A")
 
                             if bcuvarid == 0x5B:
-                                STI(self.TW[index][0], 1, str("B端电压"), str((byte4 + byte5 * 256) / 10), "V")
+                                STI(self.TW[display_index][0], 1, str("B端电压"), str((byte4 + byte5 * 256) / 10), "V")
 
                             if bcuvarid == 0x5C:
-                                STI(self.TW[index][0], 2, str("P端电压"), str((byte4 + byte5 * 256) / 10), "V")
+                                STI(self.TW[display_index][0], 2, str("P端电压"), str((byte4 + byte5 * 256) / 10), "V")
 
                             if bcuvarid == 0xC:
-                                STI(self.TW[index][0], 3, str("运行状态"), str((byte4 + byte5 * 256)), "0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ")
+                                STI(self.TW[display_index][0], 3, str("运行状态"), str((byte4 + byte5 * 256)), "0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ")
 
                             if bcuvarid == 0x10:
-                                STI(self.TW[index][0], 4, str("SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 4, str("SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x148:
-                                STI(self.TW[index][0], 5, str("最大单体电压"), str((byte4 + byte5 * 256)), "mv")
+                                STI(self.TW[display_index][0], 5, str("最大单体电压"), str((byte4 + byte5 * 256)), "mv")
 
                             if bcuvarid == 0x14B:
-                                STI(self.TW[index][0], 6, str("最小单体电压"), str((byte4 + byte5 * 256)), "mv")
+                                STI(self.TW[display_index][0], 6, str("最小单体电压"), str((byte4 + byte5 * 256)), "mv")
 
                             # if bcuvarid == 0x00:
-                            #     STI(self.TW[index][0], 7, str("充电继电器"), str("暂无"), "0断开-1闭合,继电器回读状态")
+                            #     STI(self.TW[display_index][0], 7, str("充电继电器"), str("暂无"), "0断开-1闭合,继电器回读状态")
                             #
                             # if bcuvarid == 0x00:
-                            #     STI(self.TW[index][0], 8, str("放电继电器"), str("暂无"), "0断开-1闭合,继电器回读状态")
+                            #     STI(self.TW[display_index][0], 8, str("放电继电器"), str("暂无"), "0断开-1闭合,继电器回读状态")
 
                             if bcuvarid == 0x114:
-                                STI(self.TW[index][0], 9, str("最严重告警等级"), str((byte4 + byte5 * 256)), "")
+                                STI(self.TW[display_index][0], 9, str("最严重告警等级"), str((byte4 + byte5 * 256)), "")
 
                             if bcuvarid == 0x1AF:
-                                STI(self.TW[index][0], 10, str("最大允许充电电流"), str((byte4 + byte5 * 256)/10), "A")
+                                STI(self.TW[display_index][0], 10, str("最大允许充电电流"), str((byte4 + byte5 * 256)/10), "A")
 
                             if bcuvarid == 0x1AD:
-                                STI(self.TW[index][0], 11, str("最大允许放电电流"), str((byte4 + byte5 * 256)/10), "A")
+                                STI(self.TW[display_index][0], 11, str("最大允许放电电流"), str((byte4 + byte5 * 256)/10), "A")
 
                             if bcuvarid == 0x1C0:
-                                STI(self.TW[index][0], 15, str("MAX_SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 15, str("MAX_SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C1:
-                                STI(self.TW[index][0], 16, str("MIN_SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 16, str("MIN_SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C2:
-                                STI(self.TW[index][0], 17, str("PURE_SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 17, str("PURE_SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C3:
-                                STI(self.TW[index][0], 18, str("REVISE_SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 18, str("REVISE_SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C4:
-                                STI(self.TW[index][0], 19, str("REVISESOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 19, str("REVISESOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C5:
-                                STI(self.TW[index][0], 20, str("CELL_MIN_SOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 20, str("CELL_MIN_SOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C6:
-                                STI(self.TW[index][0], 21, str("CELL_MAX_SOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 21, str("CELL_MAX_SOC_TEMP"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1C7:
-                                STI(self.TW[index][0], 22, str("PACK_FUZZY_SOC"), str((byte4 + byte5 * 256)), "0.1%")
+                                STI(self.TW[display_index][0], 22, str("PACK_FUZZY_SOC"), str((byte4 + byte5 * 256)), "0.1%")
 
                             if bcuvarid == 0x1BE:
-                                STI(self.TW[index][0], 30, str("OCVMAXSOC"), str((byte4 + byte5 * 256)), "OCV矫正最大SOC")
+                                STI(self.TW[display_index][0], 30, str("OCVMAXSOC"), str((byte4 + byte5 * 256)), "OCV矫正最大SOC")
 
                             if bcuvarid == 0x1BF:
-                                STI(self.TW[index][0], 31, str("OCVMINSOC"), str((byte4 + byte5 * 256)), "OCV矫正最小SOC")
+                                STI(self.TW[display_index][0], 31, str("OCVMINSOC"), str((byte4 + byte5 * 256)), "OCV矫正最小SOC")
 
                             if bcuvarid == 0x1CA:
-                                STI(self.TW[index][0], 32, str("OCV_UPDT_COUNT"), str((byte4 + byte5 * 256)), "OCV更新次数")
+                                STI(self.TW[display_index][0], 32, str("OCV_UPDT_COUNT"), str((byte4 + byte5 * 256)), "OCV更新次数")
 
                             if bcuvarid == 0x1CB:
-                                STI(self.TW[index][0], 33, str("OCV_FAIL_CODE"), str((byte4 + byte5 * 256)), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。")
+                                STI(self.TW[display_index][0], 33, str("OCV_FAIL_CODE"), str((byte4 + byte5 * 256)), "OCV无法原因标志(NA)：0-正常；bit0-最大电芯电压或最小电芯电压处于平台区；bit1-休眠时间不满足；bit2-初始上电电流过大；bit3-电压超超范围无效；bit4-电压处于平台期；bit5-温度无效；bit6-静置时间不满足；bit-7；部分电芯电压处于平台区。")
 
                             if bcuvarid == 0x1C9:
-                                STI(self.TW[index][0], 34, str("满充标志位"), str((byte4 + byte5 * 256)),"上报满充标志位，0-未满充，1-满充")
+                                STI(self.TW[display_index][0], 34, str("满充标志位"), str((byte4 + byte5 * 256)),"上报满充标志位，0-未满充，1-满充")
 
                             if bcuvarid == 0x90801:
-                                STI(self.TW[index][0], 35, str("TOTAL_CHRG_AH"), str((byte4 + byte5 * 256)),"0.01AH")
+                                STI(self.TW[display_index][0], 35, str("TOTAL_CHRG_AH"), str((byte4 + byte5 * 256)),"0.01AH")
 
                             if bcuvarid == 0x90802:
-                                STI(self.TW[index][0], 36, str("TOTAL_DSCH_AH"), str((byte4 + byte5 * 256)),"0.01AH")
+                                STI(self.TW[display_index][0], 36, str("TOTAL_DSCH_AH"), str((byte4 + byte5 * 256)),"0.01AH")
 
                             if bcuvarid == 0x90803:
-                                STI(self.TW[index][0], 37, str("CHRG_TIMES"), str((byte4 + byte5 * 256)),"累计充电次数")
+                                STI(self.TW[display_index][0], 37, str("CHRG_TIMES"), str((byte4 + byte5 * 256)),"累计充电次数")
 
                             if bcuvarid == 0x90804:
-                                STI(self.TW[index][0], 38, str("DSCH_TIMES"), str((byte4 + byte5 * 256)),"累计放电次数")
+                                STI(self.TW[display_index][0], 38, str("DSCH_TIMES"), str((byte4 + byte5 * 256)),"累计放电次数")
 
                             if bcuvarid == 0x1FF:
-                                STI(self.TW[index][0], 43, str("剩余充电时间"), str((byte4 + byte5 * 256)),"S")
+                                STI(self.TW[display_index][0], 43, str("剩余充电时间"), str((byte4 + byte5 * 256)),"S")
 
                             if bcuvarid == 0x200:
-                                STI(self.TW[index][0], 44, str("剩余放电时间"), str((byte4 + byte5 * 256)),"S")
+                                STI(self.TW[display_index][0], 44, str("剩余放电时间"), str((byte4 + byte5 * 256)),"S")
 
                             if bcuvarid == 0x14E:
-                                STI(self.TW[index][0], 45, str("最高温度"), str((byte4 + byte5 * 256)),"0.1℃")
+                                STI(self.TW[display_index][0], 45, str("最高温度"), str((byte4 + byte5 * 256)),"0.1℃")
 
                             if bcuvarid == 0x151:
-                                STI(self.TW[index][0], 46, str("最低温度"), str((byte4 + byte5 * 256)),"0.1℃")
+                                STI(self.TW[display_index][0], 46, str("最低温度"), str((byte4 + byte5 * 256)),"0.1℃")
 
                             if bcuvarid == 0x144:
-                                STI(self.TW[index][0], 47, str("平均温度"), str((byte4 + byte5 * 256)),"0.1℃")
+                                STI(self.TW[display_index][0], 47, str("平均温度"), str((byte4 + byte5 * 256)),"0.1℃")
 
                             if bcuvarid == 0x15:
-                                STI(self.TW[index][0], 48, str("SOE"), str((byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][0], 48, str("SOE"), str((byte4 + byte5 * 256)),"0.1%")
 
                             if bcuvarid == 0x1F:
-                                STI(self.TW[index][0], 49, str("SOE_Disp"), str((byte4 + byte5 * 256)),"0.1%")
+                                STI(self.TW[display_index][0], 49, str("SOE_Disp"), str((byte4 + byte5 * 256)),"0.1%")
 
                             if bcuvarid == 0x252:
-                                STI(self.TW[index][0], 50, str("剩余可放电"), str((byte4 + byte5 * 256)), "0.01KHW")
+                                STI(self.TW[display_index][0], 50, str("剩余可放电"), str((byte4 + byte5 * 256)), "0.01KHW")
 
                             if bcuvarid == 0x253:
-                                STI(self.TW[index][0], 51, str("剩余可充电"), str((byte4 + byte5 * 256)), "0.01KHW")
+                                STI(self.TW[display_index][0], 51, str("剩余可充电"), str((byte4 + byte5 * 256)), "0.01KHW")
 
                             if bcuvarid == 0x1FD:
-                                STI(self.TW[index][0], 52, str("单次充电电量"), str((byte4 + byte5 * 256)),"0.01KHW")
+                                STI(self.TW[display_index][0], 52, str("单次充电电量"), str((byte4 + byte5 * 256)),"0.01KHW")
 
                             if bcuvarid == 0x1FE:
-                                STI(self.TW[index][0], 53, str("单次放电电量"), str((byte4 + byte5 * 256)),"0.01KHW")
+                                STI(self.TW[display_index][0], 53, str("单次放电电量"), str((byte4 + byte5 * 256)),"0.01KHW")
 
                             if bcuvarid == 0x1D7:
-                                STI(self.TW[index][0], 54, str("OCV置位结果"), str((byte4 + byte5 * 256)),"")
+                                STI(self.TW[display_index][0], 54, str("OCV置位结果"), str((byte4 + byte5 * 256)),"")
 
                             if bcuvarid == 0x1C8:
-                                STI(self.TW[index][0], 55, str("满充满放状态"), str((byte4 + byte5 * 256)),"0-默认，1-满充，2-满放")
+                                STI(self.TW[display_index][0], 55, str("满充满放状态"), str((byte4 + byte5 * 256)),"0-默认，1-满充，2-满放")
 
                             if bcuvarid == 0x1C9:
-                                STI(self.TW[index][0], 56, str("满充满放状态"), str((byte4 + byte5 * 256)),"0-默认，1-满充，2-满放")
+                                STI(self.TW[display_index][0], 56, str("满充满放状态"), str((byte4 + byte5 * 256)),"0-默认，1-满充，2-满放")
                             # if bcuvarid == 0x1C8:
-                            #     STI(self.TW[index][0], 39, str("FULL_CHRG_DSCHG_FLG"), str((byte4 + byte5 * 256)),"满充满放标志，0-默认；1-满充；2-满放")
+                            #     STI(self.TW[display_index][0], 39, str("FULL_CHRG_DSCHG_FLG"), str((byte4 + byte5 * 256)),"满充满放标志，0-默认；1-满充；2-满放")
 
 
 
@@ -1231,41 +1331,41 @@ class Edit(Ui_Form, QWidget):
 
 
                     # # 整簇
-                    STIID("0x100000"+addr, ID, self.TW[index][2], 0, "系统运行时间", str(byte3*256*256*256+byte2*256*256+byte1 * 256 + byte0), "S",self.ResDataRec[index],2)
-                    #STIID("0x1301ef"+addr,ID,self.TW[index][2],1,"B总压",str((byte5 * 256 + byte4)/10),"V",self.ResDataRec[index],2)
-                    #STIID("0x1203ef"+addr, ID, self.TW[index][2], 2, "P总压", str((byte5 * 256 + byte4) / 10), "V",self.ResDataRec[index],2)
-                    STIID("0x1203ef"+addr, ID, self.TW[index][2], 3, "SOH", str((byte1 * 256 + byte0)), "0.1%",self.ResDataRec[index],2)
+                    STIID("0x100000"+addr, ID, self.TW[display_index][2], 0, "系统运行时间", str(byte3*256*256*256+byte2*256*256+byte1 * 256 + byte0), "S",self.ResDataRec[index],2)
+                    #STIID("0x1301ef"+addr,ID,self.TW[display_index][2],1,"B总压",str((byte5 * 256 + byte4)/10),"V",self.ResDataRec[index],2)
+                    #STIID("0x1203ef"+addr, ID, self.TW[display_index][2], 2, "P总压", str((byte5 * 256 + byte4) / 10), "V",self.ResDataRec[index],2)
+                    STIID("0x1203ef"+addr, ID, self.TW[display_index][2], 3, "SOH", str((byte1 * 256 + byte0)), "0.1%",self.ResDataRec[index],2)
 
-                    STIID("0x120CEF"+addr, ID, self.TW[index][2], 8, "断路器", str(byte2>>3&0x01), "0断开-1闭合",self.ResDataRec[index],2)
-                    # STIID("0x1204EF"+addr, ID, self.TW[index][2], 9, "可充电电量", str((byte1* 256 + byte0 )), "0.1AH",self.ResDataRec[index],2)
-                    # STIID("0x1204EF"+addr, ID, self.TW[index][2], 10, "可放电电量", str((byte3 * 256 + byte2)), "0.1AH",self.ResDataRec[index],2)
-                    # STIID("0x1204EF"+addr, ID, self.TW[index][2], 11, "单次累计充电电量", str((byte5* 256 + byte4 )), "0.01KWH",self.ResDataRec[index],2)
-                    # STIID("0x1204EF"+addr, ID, self.TW[index][2], 12, "单次累计放电电量", str((byte7 * 256 + byte6)), "0.01KWH",self.ResDataRec[index],2)
+                    STIID("0x120CEF"+addr, ID, self.TW[display_index][2], 8, "断路器", str(byte2>>3&0x01), "0断开-1闭合",self.ResDataRec[index],2)
+                    # STIID("0x1204EF"+addr, ID, self.TW[display_index][2], 9, "可充电电量", str((byte1* 256 + byte0 )), "0.1AH",self.ResDataRec[index],2)
+                    # STIID("0x1204EF"+addr, ID, self.TW[display_index][2], 10, "可放电电量", str((byte3 * 256 + byte2)), "0.1AH",self.ResDataRec[index],2)
+                    # STIID("0x1204EF"+addr, ID, self.TW[display_index][2], 11, "单次累计充电电量", str((byte5* 256 + byte4 )), "0.01KWH",self.ResDataRec[index],2)
+                    # STIID("0x1204EF"+addr, ID, self.TW[display_index][2], 12, "单次累计放电电量", str((byte7 * 256 + byte6)), "0.01KWH",self.ResDataRec[index],2)
 
-                    STIID("0x1205EF" + addr, ID, self.TW[index][2], 13, "累计充电电量", str(byte3*256*256*256+byte2*256*256+byte1 * 256 + byte0), "0.1KWH",self.ResDataRec[index],2)
-                    STIID("0x1205EF" + addr, ID, self.TW[index][2], 14, "累计放电电量", str(byte7*256*256*256+byte6*256*256+byte5 * 256 + byte4), "0.1KWH",self.ResDataRec[index],2)
-
-
-
-                    STIID("0x1202EF" + addr, ID, self.TW[index][2], 15, "正对地电阻", str((byte1 * 256 + byte0)),"KΩ",self.ResDataRec[index],2)
-                    STIID("0x1202EF" + addr, ID, self.TW[index][2], 16, "负对地电阻", str((byte3 * 256 + byte2)), "KΩ",self.ResDataRec[index],2)
-                    STIID("0x18FE16" + addr, ID, self.TW[index][2], 17, "总绝缘电阻", str((byte1 * 256 + byte0)), "KΩ",self.ResDataRec[index],2)
+                    STIID("0x1205EF" + addr, ID, self.TW[display_index][2], 13, "累计充电电量", str(byte3*256*256*256+byte2*256*256+byte1 * 256 + byte0), "0.1KWH",self.ResDataRec[index],2)
+                    STIID("0x1205EF" + addr, ID, self.TW[display_index][2], 14, "累计放电电量", str(byte7*256*256*256+byte6*256*256+byte5 * 256 + byte4), "0.1KWH",self.ResDataRec[index],2)
 
 
-                    STIID("0x1209EF" + addr, ID, self.TW[index][2], 18, "最大单体电压", str((byte1 * 256 + byte0)), "mv",self.ResDataRec[index],2)
-                    STIID("0x1209EF" + addr, ID, self.TW[index][2], 19, "最小单体电压", str((byte3 * 256 + byte2)), "mv",self.ResDataRec[index],2)
+
+                    STIID("0x1202EF" + addr, ID, self.TW[display_index][2], 15, "正对地电阻", str((byte1 * 256 + byte0)),"KΩ",self.ResDataRec[index],2)
+                    STIID("0x1202EF" + addr, ID, self.TW[display_index][2], 16, "负对地电阻", str((byte3 * 256 + byte2)), "KΩ",self.ResDataRec[index],2)
+                    STIID("0x18FE16" + addr, ID, self.TW[display_index][2], 17, "总绝缘电阻", str((byte1 * 256 + byte0)), "KΩ",self.ResDataRec[index],2)
+
+
+                    STIID("0x1209EF" + addr, ID, self.TW[display_index][2], 18, "最大单体电压", str((byte1 * 256 + byte0)), "mv",self.ResDataRec[index],2)
+                    STIID("0x1209EF" + addr, ID, self.TW[display_index][2], 19, "最小单体电压", str((byte3 * 256 + byte2)), "mv",self.ResDataRec[index],2)
                     temp = byte5 * 256 + byte4
-                    STIID("0x1209EF" + addr, ID, self.TW[index][2], 20, "最大单体电压位置", "{}-{}".format((temp>>8)&0xFF,(temp)&0xFF), "模组-单体",self.ResDataRec[index],2)
+                    STIID("0x1209EF" + addr, ID, self.TW[display_index][2], 20, "最大单体电压位置", "{}-{}".format((temp>>8)&0xFF,(temp)&0xFF), "模组-单体",self.ResDataRec[index],2)
                     temp = byte7 * 256 + byte6
-                    STIID("0x1209EF" + addr, ID, self.TW[index][2], 21, "最小单体电压位置", "{}-{}".format((temp>>8)&0xFF,(temp)&0xFF), "模组-单体",self.ResDataRec[index],2)
+                    STIID("0x1209EF" + addr, ID, self.TW[display_index][2], 21, "最小单体电压位置", "{}-{}".format((temp>>8)&0xFF,(temp)&0xFF), "模组-单体",self.ResDataRec[index],2)
 
-                    STIID("0x120AEF" + addr, ID, self.TW[index][2], 22, "最大单体温度", str(Unsignal_Change(byte1 * 256 + byte0)/10), "℃",self.ResDataRec[index],2)
-                    STIID("0x120AEF" + addr, ID, self.TW[index][2], 23, "最小单体温度", str(Unsignal_Change(byte3 * 256 + byte2)/10), "℃",self.ResDataRec[index],2)
+                    STIID("0x120AEF" + addr, ID, self.TW[display_index][2], 22, "最大单体温度", str(Unsignal_Change(byte1 * 256 + byte0)/10), "℃",self.ResDataRec[index],2)
+                    STIID("0x120AEF" + addr, ID, self.TW[display_index][2], 23, "最小单体温度", str(Unsignal_Change(byte3 * 256 + byte2)/10), "℃",self.ResDataRec[index],2)
 
-                    STIID("0x18FE19" + addr, ID, self.TW[index][2], 24, "高压箱最高温度", str(Unsignal_Change(byte5 * 256 + byte4)), "0.1℃",self.ResDataRec[index],2)
-                    STIID("0x18FE19" + addr, ID, self.TW[index][2], 25, "工装模式",str((byte7 * 256 + byte6)), "0-正常，1-工装",self.ResDataRec[index],2)
+                    STIID("0x18FE19" + addr, ID, self.TW[display_index][2], 24, "高压箱最高温度", str(Unsignal_Change(byte5 * 256 + byte4)), "0.1℃",self.ResDataRec[index],2)
+                    STIID("0x18FE19" + addr, ID, self.TW[display_index][2], 25, "工装模式",str((byte7 * 256 + byte6)), "0-正常，1-工装",self.ResDataRec[index],2)
 
-                    #STIID("0x1206EF" + addr, ID, self.TW[index][2], 26, "簇总容量",str((byte7 * 256 + byte6)/10), "AH",self.ResDataRec[index],2)
+                    #STIID("0x1206EF" + addr, ID, self.TW[display_index][2], 26, "簇总容量",str((byte7 * 256 + byte6)/10), "AH",self.ResDataRec[index],2)
 
                     if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                         bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
@@ -1273,9 +1373,9 @@ class Edit(Ui_Form, QWidget):
                             self.PACK_LIFE_HIGH = byte4 + byte5 * 256
                         if bauvarid == 0x9084B:
                             self.PACK_LIFE_LOW = byte4 + byte5 * 256
-                        # STI(self.TW[index][2], 27, str("PACK_LIFE_LOW"),str(self.PACK_LIFE_LOW), "0.1MIN")
-                        # STI(self.TW[index][2], 28, str("PACK_LIFE_HIGH"), str(self.PACK_LIFE_HIGH), "0.1MIN")
-                            STI(self.TW[index][2], 28, str("PACK_LIFE"), str(self.PACK_LIFE_LOW+(self.PACK_LIFE_HIGH<<16)), "MIN")
+                        # STI(self.TW[display_index][2], 27, str("PACK_LIFE_LOW"),str(self.PACK_LIFE_LOW), "0.1MIN")
+                        # STI(self.TW[display_index][2], 28, str("PACK_LIFE_HIGH"), str(self.PACK_LIFE_HIGH), "0.1MIN")
+                            STI(self.TW[display_index][2], 28, str("PACK_LIFE"), str(self.PACK_LIFE_LOW+(self.PACK_LIFE_HIGH<<16)), "MIN")
 
                         if bauvarid == 0x90878:
                             self.PACK_TEMP_LIFE_HIGH = byte4 + byte5 * 256
@@ -1283,64 +1383,64 @@ class Edit(Ui_Form, QWidget):
                         if bauvarid == 0x90879:
                             self.PACK_TEMP_LIFE_LOW = byte4 + byte5 * 256
 
-                            STI(self.TW[index][2], 29, str("SOH温度修正后寿命"),str(self.PACK_TEMP_LIFE_LOW + (self.PACK_TEMP_LIFE_HIGH << 16)), "0.1MIN")
+                            STI(self.TW[display_index][2], 29, str("SOH温度修正后寿命"),str(self.PACK_TEMP_LIFE_LOW + (self.PACK_TEMP_LIFE_HIGH << 16)), "0.1MIN")
 
                         if bauvarid==0x90401:
-                            STI(self.TW[index][2], 30, str("模组数"), str((byte4 + byte5 * 256)),"模组数")
+                            STI(self.TW[display_index][2], 30, str("模组数"), str((byte4 + byte5 * 256)),"模组数")
                         if bauvarid==0x90402:
-                            STI(self.TW[index][2], 31, str("每个模组AFE数量"), str((byte4 + byte5 * 256)),"每个模组AFE数量")
+                            STI(self.TW[display_index][2], 31, str("每个模组AFE数量"), str((byte4 + byte5 * 256)),"每个模组AFE数量")
                         if bauvarid==0x9045F:
-                            STI(self.TW[index][2], 32, str("每个模组单体数量"), str((byte4 + byte5 * 256)),"每个模组单体数量")
+                            STI(self.TW[display_index][2], 32, str("每个模组单体数量"), str((byte4 + byte5 * 256)),"每个模组单体数量")
                         if bauvarid==0x90460:
-                            STI(self.TW[index][2], 33, str("每个模组温度数量"), str((byte4 + byte5 * 256)),"每个模组温度数量")
+                            STI(self.TW[display_index][2], 33, str("每个模组温度数量"), str((byte4 + byte5 * 256)),"每个模组温度数量")
                         if bauvarid==0x90461:
-                            STI(self.TW[index][2], 34, str("极柱温度数"), str((byte4 + byte5 * 256)),"极柱温度数")
+                            STI(self.TW[display_index][2], 34, str("极柱温度数"), str((byte4 + byte5 * 256)),"极柱温度数")
                         if bauvarid == 0x9040D:
-                            STI(self.TW[index][2], 35, str("中线标志位"), str((byte4 + byte5 * 256)), "1-带中线，0-不带中线")
+                            STI(self.TW[display_index][2], 35, str("中线标志位"), str((byte4 + byte5 * 256)), "1-带中线，0-不带中线")
 
                         if bauvarid == 0x5B:
-                            STI(self.TW[index][2], 1, str("B总压"), str((byte5 * 256 + byte4)/10), "V")
+                            STI(self.TW[display_index][2], 1, str("B总压"), str((byte5 * 256 + byte4)/10), "V")
 
                         if bauvarid == 0x5C:
-                            STI(self.TW[index][2], 2, str("P总压"), str((byte5 * 256 + byte4)/10), "V")
+                            STI(self.TW[display_index][2], 2, str("P总压"), str((byte5 * 256 + byte4)/10), "V")
 
                         if bauvarid == 0x90446:
-                            STI(self.TW[index][2], 37, str("均衡启动压差"), str((byte5 * 256 + byte4)), "mv")
+                            STI(self.TW[display_index][2], 37, str("均衡启动压差"), str((byte5 * 256 + byte4)), "mv")
                         if bauvarid == 0x90447:
-                            STI(self.TW[index][2], 38, str("均衡启动停止压差"), str((byte5 * 256 + byte4)), "mv")
+                            STI(self.TW[display_index][2], 38, str("均衡启动停止压差"), str((byte5 * 256 + byte4)), "mv")
                         if bauvarid == 0x9044A:
-                            STI(self.TW[index][2], 39, str("均衡启动电压"), str((byte5 * 256 + byte4)), "mv")
+                            STI(self.TW[display_index][2], 39, str("均衡启动电压"), str((byte5 * 256 + byte4)), "mv")
                         if bauvarid == 0x9044B:
-                            STI(self.TW[index][2], 40, str("均衡保护电压上限"), str((byte5 * 256 + byte4)), "mv")
+                            STI(self.TW[display_index][2], 40, str("均衡保护电压上限"), str((byte5 * 256 + byte4)), "mv")
                         if bauvarid == 0x9044C:
-                            STI(self.TW[index][2], 41, str("均衡保护电压下限"), str((byte5 * 256 + byte4)), "mv")
+                            STI(self.TW[display_index][2], 41, str("均衡保护电压下限"), str((byte5 * 256 + byte4)), "mv")
                         if bauvarid == 0x9044D:
-                            STI(self.TW[index][2], 42, str("均衡开启温度上限"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "℃")
+                            STI(self.TW[display_index][2], 42, str("均衡开启温度上限"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "℃")
                         if bauvarid == 0x9044E:
-                            STI(self.TW[index][2], 43, str("均衡开启温度下限"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "℃")
+                            STI(self.TW[display_index][2], 43, str("均衡开启温度下限"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "℃")
                         if bauvarid == 0x9045D:
-                            STI(self.TW[index][2], 45, str("容量"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "AH")
+                            STI(self.TW[display_index][2], 45, str("容量"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "AH")
                         if bauvarid == 0x90479:
-                            STI(self.TW[index][2], 46, str("最大预充时间"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "S")
+                            STI(self.TW[display_index][2], 46, str("最大预充时间"), str(Unsignal_Change(byte5 * 256 + byte4)/10), "S")
                         if bauvarid == 0x9047A:
-                            STI(self.TW[index][2], 47, str("预充压差"), str(((byte5 * 256 + byte4)&0x7FFF)/10), "V")
+                            STI(self.TW[display_index][2], 47, str("预充压差"), str(((byte5 * 256 + byte4)&0x7FFF)/10), "V")
                         if bauvarid == 0x9047C:
-                            STI(self.TW[index][2], 48, str("最小预充时间"), str(((byte5 * 256 + byte4))/10), "S")
+                            STI(self.TW[display_index][2], 48, str("最小预充时间"), str(((byte5 * 256 + byte4))/10), "S")
 
                         if bauvarid == 0x9049C:
-                            STI(self.TW[index][2], 49, str("禁充恢复最大时间"), str(((byte5 * 256 + byte4))), "H")
+                            STI(self.TW[display_index][2], 49, str("禁充恢复最大时间"), str(((byte5 * 256 + byte4))), "H")
 
                         if bauvarid == 0x9049D:
-                            STI(self.TW[index][2], 50, str("禁充恢复最小时间"), str(((byte5 * 256 + byte4))), "H")
+                            STI(self.TW[display_index][2], 50, str("禁充恢复最小时间"), str(((byte5 * 256 + byte4))), "H")
 
                         if bauvarid == 0x9047D:
-                            STI(self.TW[index][2], 51, str("预充最大电流"), str(((byte5 * 256 + byte4))), "0.1A")
+                            STI(self.TW[display_index][2], 51, str("预充最大电流"), str(((byte5 * 256 + byte4))), "0.1A")
 
                         if bauvarid == 0x9049E:
-                            STI(self.TW[index][2], 52, str("SOC\SOE定期下降时间"), str(((byte5 * 256 + byte4))), "H")
+                            STI(self.TW[display_index][2], 52, str("SOC\SOE定期下降时间"), str(((byte5 * 256 + byte4))), "H")
 
                         if bauvarid == 0x9049F:
-                            STI(self.TW[index][2], 53, str("SOC\SOE定期下降量"), str(((byte5 * 256 + byte4))), "0.1%")
+                            STI(self.TW[display_index][2], 53, str("SOC\SOE定期下降量"), str(((byte5 * 256 + byte4))), "0.1%")
 
 
 
@@ -1471,7 +1571,7 @@ class Edit(Ui_Form, QWidget):
 
             # 电压 #温度
 
-            if (("0x1235EF" + config["ADDRESLIST"][self.S18.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1235EF" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 if((byte1 * 256 + byte0)>>12==0):
                     for i in range(0, int(config["LECU_NUM"])*int(config["CELL_NUM"])):
                         if byte0 < int(config["LECU_NUM"])*int(config["CELL_NUM"]):
@@ -1487,7 +1587,7 @@ class Edit(Ui_Form, QWidget):
                         self.S18.setVoltageValues(Vres)
 
 
-            if (("0x1235EF" + config["ADDRESLIST"][self.S20.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1235EF" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 if ((byte1 * 256 + byte0) >> 12 == 1):
                     for i in range(0, int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"])):
                         if byte0 < int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"]):
@@ -1505,7 +1605,7 @@ class Edit(Ui_Form, QWidget):
 
 
 
-            if (("0x1881F2" + config["ADDRESLIST"][self.S19.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                # for LECU_index in range(config["LECU_NUM"]):
                 if bauvarid>4096:
@@ -1535,7 +1635,7 @@ class Edit(Ui_Form, QWidget):
 
 
             # 电芯异常
-            if (("0x1881F2" + config["ADDRESLIST"][self.S24.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 # 遍历模组
                 for i in range(0, config["LECU_NUM"]):
@@ -1553,7 +1653,7 @@ class Edit(Ui_Form, QWidget):
 
             # DIBCU状态
 
-            if (("0x1881F2" + config["ADDRESLIST"][self.S22.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 # self.S22.tableWidget.setItem(0, 0, QTableWidgetItem("J1 DI1_H"))
                 # self.S22.tableWidget.setItem(0, 1, QTableWidgetItem(str(byte4 + byte5 * 256)))
                 varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
@@ -1642,7 +1742,7 @@ class Edit(Ui_Form, QWidget):
             # for i in range(64):
             #     for j in range(32):
             try:
-                if (("0x1881F2" + config["ADDRESLIST"][self.S21.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+                if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                     data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
                     varid = data_id - config["Glaoal_Index_alarm"]
                     alarm_row = varid // 32
@@ -1656,7 +1756,7 @@ class Edit(Ui_Form, QWidget):
                 pass
 
 
-            if (("0x1883F2" + config["ADDRESLIST"][self.S21.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if (("0x1883F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
 
                 pending = getattr(self, "pending_alarm_writes", {})
@@ -1680,8 +1780,8 @@ class Edit(Ui_Form, QWidget):
                     if(byte4==1):
                         QMessageBox.information(self, "修改结果显示", "修改成功！")
 
-            if(index==config["BCU_NUM"]+8):
-                if (("0x1881F2" + config["ADDRESLIST"][self.S23.comboBox.currentIndex()].casefold()).casefold() == ID.casefold()):
+            if self.table_index == self._parameter_tab_index():
+                if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                     try:
                         if bauvarid==int(self.S23.lineEdit_13.text()):
@@ -1740,17 +1840,17 @@ class Edit(Ui_Form, QWidget):
 
             # 工装模式切换代码
             if (self.FLAG_WORK_MODE==0):
-                if (("0x18A1F2" + config["ADDRESLIST"][self.S17.comboBox_13.currentIndex()].casefold()).casefold() == ID.casefold()):
+                if (("0x18A1F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                     data = byte3*256*256*256+byte4*256*256+byte5*256+byte6
                     res_data = CanDiag_Seed_2_Key(data)
                     #发送秘钥
                     tdata = [0x06,0x27,0x12,(res_data>>24)&0xFF,(res_data>>16)&0xFF,(res_data>>8)&0xFF,(res_data)&0xFF,0xAA]
                     #print(hex(tdata))
 
-                    if self.S17.comboBox_13.currentIndex() == 0:
+                    if self._active_cluster_index() == 0:
                         self.c.Transmit(0x18A000F2, tdata, extern_flag=True, data_len=8)
-                    if self.S17.comboBox_13.currentIndex() != 0:
-                        self.c.Transmit(0x18A0A0F2 + ((self.S17.comboBox_13.currentIndex() - 1) << 8), tdata, extern_flag=True, data_len=8)
+                    if self._active_cluster_index() != 0:
+                        self.c.Transmit(0x18A0A0F2 + ((self._active_cluster_index() - 1) << 8), tdata, extern_flag=True, data_len=8)
 
                 #    打开工装
                     index = self.S17.comboBox.currentIndex()
@@ -1758,11 +1858,11 @@ class Edit(Ui_Form, QWidget):
                         data = [1, 0, 0xFF, 0xFF, 1, 0, 0xFF, 0xFF]
                     if index==1:
                         data = [1, 0, 0xFF, 0xFF, 0, 0, 0xFF, 0xFF]
-                    self.CtrlData(self.S17.comboBox_13.currentIndex(), data)
+                    self.CtrlData(self._active_cluster_index(), data)
                     self.FLAG_WORK_MODE=1
                     # index = self.S17.comboBox.currentIndex()
                     # data = [1, 0, 0xFF, 0xFF, not index, 0, 0xFF, 0xFF]
-                    # self.CtrlData(self.S17.comboBox_13.currentIndex(), data)
+                    # self.CtrlData(self._active_cluster_index(), data)
 
             #################################################################################################################
             for index, addr in enumerate(config["ADDRESLIST"]):
@@ -1827,7 +1927,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def ForceChargeOpenClose(self):
-        index1 = self.S17.comboBox_13.currentIndex()
+        index1 = self._active_cluster_index()
         index2 = self.S17.comboBox_9.currentIndex()
         #持续开
         if(index2==0):
@@ -1848,14 +1948,14 @@ class Edit(Ui_Form, QWidget):
 
 
     def S18currentIndexChanged(self):
-        if self.table_index == config["BCU_NUM"] + 3:
+        if self.table_index == self._voltage_tab_index():
             try:
                 Vres = [0 for i in range(0, 40)]
                 self.S18.setVoltageValues(Vres)
             except:
                 pass
     def S18currentIndexChangedBAL(self):
-        if self.table_index == config["BCU_NUM"] + 4:
+        if self.table_index == self._balance_tab_index():
             try:
                 VresBAL = [0 for i in range(0, 40)]
                 self.S19.setVoltageValues(VresBAL)
@@ -1863,7 +1963,7 @@ class Edit(Ui_Form, QWidget):
                 pass
 
     def S20currentIndexChangedTem(self):
-        if self.table_index == config["BCU_NUM"] + 5:
+        if self.table_index == self._temperature_tab_index():
             try:
                 VresTem = [0 for i in range(0, 40)]
                 self.S20.setVoltageValues(VresTem)
@@ -1875,7 +1975,7 @@ class Edit(Ui_Form, QWidget):
         self.FLAG_WORK_MODE=0
         index = bool(self.S17.comboBox.currentIndex())
         # index =0关闭工装  =1 打开工装
-        Cindex = self.S17.comboBox_13.currentIndex()
+        Cindex = self._active_cluster_index()
         #簇索引
 
 
@@ -1894,7 +1994,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def on_alarm_cluster_changed(self, *_args):
-        self._set_active_cluster(self.S21.comboBox.currentIndex(), refresh=False, source="alarm_page")
+        self._set_active_cluster(self._active_cluster_index(), refresh=False, source="alarm_page")
         self.S21.set_cluster_context()
         self.S21.clear_cached_values()
         self.on_alarm_parameter_read()
@@ -1949,7 +2049,7 @@ class Edit(Ui_Form, QWidget):
                 0,
             ]
             pending[data_id] = field_index
-            self.SetData(self.S21.comboBox.currentIndex(), data)
+            self.SetData(self._active_cluster_index(), data)
             time.sleep(0.003)
 
         self.pending_alarm_writes = pending
@@ -1963,7 +2063,7 @@ class Edit(Ui_Form, QWidget):
             QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再保存参数。")
             return
         data = [4, 0, 0, 0, 8, 0, 0, 0]
-        self.CtrlData(self.S21.comboBox.currentIndex(), data)
+        self.CtrlData(self._active_cluster_index(), data)
         self.S21.set_status_text("已发送保存参数到FLASH命令，请观察下位机返回状态。")
 
 
@@ -1972,7 +2072,7 @@ class Edit(Ui_Form, QWidget):
 
         if not getattr(self, "can_ready", False):
             return
-        Cindex = self.S21.comboBox.currentIndex()
+        Cindex = self._active_cluster_index()
         request_limit = getattr(self, "alarm_request_limit", self.S21.alarm_count() * 32)
         if g_index >= request_limit:
             return
@@ -2117,7 +2217,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBAUVAR(self):
-        if self.table_index ==config["BCU_NUM"]+1:
+        if self.table_index == self._current_bau_tab_index():
 
             for i in range(1):
                 # 请求剩余充电时间上半簇
@@ -2130,8 +2230,8 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBCUVAR(self):
-        index = self.table_index
-        if self.table_index<config["BCU_NUM"]+1:
+        if self.table_index in (self.ZERO_TAB_INDEX, self.CLUSTER_TAB_INDEX):
+            index = 0 if self.table_index == self.ZERO_TAB_INDEX else self._active_cluster_index()
             for i in range(1):
                 #请求剩余充电时间上半簇
 
@@ -2141,23 +2241,23 @@ class Edit(Ui_Form, QWidget):
                 self.BCUSignalQ_index = (self.BCUSignalQ_index+1)%len(self.BCUSignalQ)
 
 
-        if self.table_index == config["BCU_NUM"]+4:
+        if self.table_index == self._balance_tab_index():
 
             BAL_STARTE_0_15_LOW =(4126+self.BAL_index * BAL_JG_LEN)&0xFF
             BAL_STARTE_0_15_HIGH = ((4126 + self.BAL_index * BAL_JG_LEN)>>8) & 0xFF
             data = [BAL_STARTE_0_15_LOW, BAL_STARTE_0_15_HIGH, 0, 0, 0, 0, 0, 0]#LECU1[0-15]
-            self.QueryData(self.S19.comboBox.currentIndex(), data)
+            self.QueryData(self._active_cluster_index(), data)
 
             BAL_STARTE_0_15_LOW =(4127+self.BAL_index * BAL_JG_LEN)&0xFF
             BAL_STARTE_0_15_HIGH = ((4127 + self.BAL_index * BAL_JG_LEN)>>8) & 0xFF
             data = [BAL_STARTE_0_15_LOW, BAL_STARTE_0_15_HIGH, 0, 0, 0, 0, 0, 0]#LECU1[0-15]
-            self.QueryData(self.S19.comboBox.currentIndex(), data)
+            self.QueryData(self._active_cluster_index(), data)
 
 
             self.BAL_index = (self.BAL_index+1)%config['LECU_NUM']
 
-        if self.table_index == config["BCU_NUM"] + 9:
-            index = self.S24.comboBox.currentIndex()
+        if self.table_index == self._abnormal_cell_tab_index():
+            index = self._active_cluster_index()
             print(index)
             for i in range(1):
                 # 请求剩余充电时间上半簇
@@ -2312,7 +2412,7 @@ class Edit(Ui_Form, QWidget):
 
     def ChanlCtrlBCUEnable(self):
         index = self.S17.comboBox_12.currentIndex()
-        Cindex = self.S17.comboBox_13.currentIndex()
+        Cindex = self._active_cluster_index()
         #1-J1-HSD1
         if index==0:
             data = [2, 0, 1, 0, 1, 0, 0, 0]
@@ -2397,7 +2497,7 @@ class Edit(Ui_Form, QWidget):
 
     def ChanlCtrlBCUDisEnable(self):
         index = self.S17.comboBox_12.currentIndex()
-        Cindex = self.S17.comboBox_13.currentIndex()
+        Cindex = self._active_cluster_index()
         # 1-J1-HSD1
         if index == 0:
             data = [2, 0, 1, 0, 0, 0, 0, 0]
@@ -2483,7 +2583,7 @@ class Edit(Ui_Form, QWidget):
 
     def BALANCECtrl(self):
         AFE_index = self.S17.comboBox_2.currentIndex()
-        Cindex = self.S17.comboBox_13.currentIndex()
+        Cindex = self._active_cluster_index()
 
         b1 = self.S17.CB1.isChecked()
         b2 = self.S17.CB2.isChecked()
@@ -2513,7 +2613,7 @@ class Edit(Ui_Form, QWidget):
 
     def BALANCECtrlClose(self):
         AFE_index = self.S17.comboBox_2.currentIndex()
-        Cindex = self.S17.comboBox_13.currentIndex()
+        Cindex = self._active_cluster_index()
         for i in range(0,4):
             data = [7, 0, i, 0, 0, 0, 0, 0]
             self.CtrlData(Cindex, data)
@@ -2537,7 +2637,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def DIState(self):
-        Cindex = self.S22.comboBox.currentIndex()
+        Cindex = self._active_cluster_index()
         #DI1_H
         data = [0x24,0,0,0,0,0,0,0]
         self.QueryData(Cindex,data)
@@ -2647,7 +2747,7 @@ class Edit(Ui_Form, QWidget):
             self.c.Transmit(0x1882A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
 
     def ParProcess(self):
-        Cindex = self.S23.comboBox.currentIndex()
+        Cindex = self._active_cluster_index()
         index = self.S23.comboBox_2.currentIndex()+1
         if ((index==4) or (index==5)):
             return
@@ -2667,7 +2767,7 @@ class Edit(Ui_Form, QWidget):
     def RequestSetData(self):
         global g_index
 
-        Cindex=self.S21.comboBox.currentIndex()
+        Cindex=self._active_cluster_index()
         #print(g_index)
         b1 = (config["Glaoal_Index_alarm"] + g_index) & (0xFF)
         b2 = ((config["Glaoal_Index_alarm"] + g_index) >> 8) & (0xFF)
@@ -2689,7 +2789,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def AlarmLevel(self):
-        addr = config["ADDRESLIST"][self.S21.comboBox.currentIndex()]
+        addr = config["ADDRESLIST"][self._active_cluster_index()]
         #遍历字典
         #for addr in AlarmClassDict:
             #遍历ID
@@ -2810,7 +2910,7 @@ class Edit(Ui_Form, QWidget):
         elif index==4:
             temp = int(self.S23.lineEdit_19.text())
         data = [temp&0xFF, (temp>>8)&0xFF, 0, 0, 0, 0, 0, 0]
-        Cindex = self.S23.comboBox.currentIndex()
+        Cindex = self._active_cluster_index()
         self.QueryData(Cindex, data)
 
     def BAUVARSearch(self, index):

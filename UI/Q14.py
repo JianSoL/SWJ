@@ -232,6 +232,9 @@ class Ui_Form(object):
 
         for i in range(0,CU_NUM+8):
             self.tabWidget.addTab(self.tab[i], "")
+        if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
+            for i in range(2, CU_NUM - 1):
+                self.tabWidget.tabBar().setTabVisible(i, False)
 
 
         #self.retranslateUi(Form)
@@ -255,7 +258,9 @@ class Ui_Form(object):
         #self.tableWidget[0].setItem(0,0,QTableWidgetItem("测试"))
         # self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab), _translate("Form", "簇1"))
         # self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_2), _translate("Form", "簇2"))
-        for i in range(1,CU_NUM-1):
+        if CU_NUM > 2:
+            self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[1]), "簇")
+        for i in range(2,CU_NUM-1):
             self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[i]),"簇"+str(i))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[0]), "00")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM-1]), "BAU")

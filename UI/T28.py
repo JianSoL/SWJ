@@ -115,7 +115,7 @@ class MainWindow(QWidget):
     @staticmethod
     def default_status_text():
         return (
-            "选择目标簇后点击“读取告警参数”。左侧表格显示阈值/回差摘要，"
+            "使用顶部“当前簇”选择目标簇后点击“读取告警参数”。左侧表格显示阈值/回差摘要，"
             "选中告警后可在右侧修改完整参数并写入当前告警。"
         )
 
@@ -144,8 +144,9 @@ class MainWindow(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
-        toolbar.addWidget(_field_label("目标簇"))
 
+        self.cluster_caption = _field_label("目标簇")
+        self.cluster_caption.hide()
         self.comboBox = QComboBox(self)
         for index, address in enumerate(config.get("ADDRESLIST", [])):
             if index == 0:
@@ -153,11 +154,11 @@ class MainWindow(QWidget):
             else:
                 label = f"簇{index} / {address}"
             self.comboBox.addItem(label)
-        toolbar.addWidget(self.comboBox)
+        self.comboBox.hide()
 
         self.cluster_label = QLabel("当前簇: -", self)
         self.cluster_label.setObjectName("contextLabel")
-        toolbar.addWidget(self.cluster_label)
+        self.cluster_label.hide()
         toolbar.addStretch(1)
 
         self.button = QPushButton("读取告警参数", self)
