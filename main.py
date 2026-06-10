@@ -10,6 +10,7 @@ import threading
 import json
 from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
+from UI.T33 import HistoryLogRecord
 from functools import partial
 from PyQt6.QtGui import QColor
 import yaml
@@ -487,6 +488,8 @@ class Edit(Ui_Form, QWidget):
                 self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S26"):
+                self.S26.set_cluster_context(cluster_index, self.selected_cluster_address)
 
             if (
                 source in ("top", "init")
@@ -764,11 +767,11 @@ class Edit(Ui_Form, QWidget):
 
         #参数管理
         self.S23.pushButton.clicked.connect(self.ParProcess)
-        self.S26.refresh_button.clicked.connect(self.refresh_history_log_files)
-        self.S26.load_button.clicked.connect(self.load_selected_history_log)
-        self.S26.export_button.clicked.connect(self.export_history_log_table)
-        self.S26.open_dir_button.clicked.connect(self.open_history_log_dir)
-        self.S26.clear_button.clicked.connect(self.clear_history_log_table)
+        self.S26.read_button.clicked.connect(self.on_history_log_read)
+        self.S26.stop_button.clicked.connect(self.on_history_log_stop)
+        self.S26.save_button.clicked.connect(self.on_history_log_save)
+        self.S26.clear_table_button.clicked.connect(self.on_history_log_clear_table)
+        self.S26.clear_device_button.clicked.connect(self.on_history_log_clear_device)
 
         self.S21.submit_button.clicked.connect(self.on_alarm_parameter_save_flash)
 
@@ -794,9 +797,8 @@ class Edit(Ui_Form, QWidget):
         )
 
 
-        self.history_log_dataframe = None
+        self.history_log_stop_requested = False
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
-        self.refresh_history_log_files()
 
         self.BAL_index = 0
         self.DXYC_index= 0
@@ -2696,64 +2698,444 @@ class Edit(Ui_Form, QWidget):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "hisData")
 
 
-    def refresh_history_log_files(self):
-        log_dir = self._history_log_dir()
-        os.makedirs(log_dir, exist_ok=True)
-        files = [
-            os.path.join(log_dir, name)
-            for name in os.listdir(log_dir)
-            if name.lower().endswith(".csv")
+    def _history_log_ready(self):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取历史日志。")
+            return False
+        if self._active_cluster_index() <= 0:
+            QMessageBox.warning(self, "未选择簇", "请先选择目标簇。")
+            return False
+        return True
+
+
+    def _pause_history_log_timers(self):
+        active_timer_names = []
+        for timer_name in ("send_time", "send_time1", "timer1", "timerResData", "timerDI", "timer_Forcecharge"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+                active_timer_names.append(timer_name)
+        return active_timer_names
+
+
+    def _resume_history_log_timers(self, active_timer_names):
+        if not getattr(self, "can_ready", False):
+            return
+        for timer_name in active_timer_names:
+            timer = getattr(self, timer_name, None)
+            if timer is not None and not timer.isActive():
+                timer.start()
+
+
+    def _history_log_addr(self, cluster_index):
+        return int(str(config["ADDRESLIST"][cluster_index]), 16)
+
+
+    def _history_log_request_id(self, cluster_index):
+        target = self._history_log_addr(cluster_index)
+        source = int(str(config.get("IPCaddr", "F2")), 16)
+        return 0x18000000 | (0x86 << 16) | (target << 8) | source
+
+
+    def _history_log_response_id(self, cluster_index, response_pf=0x87):
+        source = self._history_log_addr(cluster_index)
+        target = int(str(config.get("IPCaddr", "F2")), 16)
+        return 0x18000000 | (int(response_pf) << 16) | (target << 8) | source
+
+
+    def _flush_can_rx(self):
+        self._history_log_frame_backlog = []
+        flushed_count = 0
+        for _ in range(4):
+            frames = self.c.receive_frames(max_count=200, timeout_ms=0)
+            if not frames:
+                break
+            flushed_count += len(frames)
+        if flushed_count:
+            self.rx_frame_count += flushed_count
+            self._update_rx_status()
+
+
+    def _pop_history_log_backlog(self, expected_id, predicate):
+        backlog = getattr(self, "_history_log_frame_backlog", [])
+        for index, frame in enumerate(backlog):
+            if int(frame.frame_id) == int(expected_id) and predicate(frame):
+                return backlog.pop(index)
+        return None
+
+
+    def _send_history_log_request(self, cluster_index, log_index, log_type):
+        data = [
+            int(log_index) & 0xFF,
+            (int(log_index) >> 8) & 0xFF,
+            int(log_type) & 0xFF,
+            0,
+            0,
+            0,
+            0,
+            0,
         ]
-        files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-        self.S26.set_files(files)
-        self.S26.set_status_text(f"已发现 {len(files)} 个历史日志文件。")
+        result = self.c.Transmit(
+            self._history_log_request_id(cluster_index),
+            data,
+            extern_flag=True,
+            data_len=8,
+        )
+        if result <= 0:
+            raise RuntimeError("历史日志读取请求发送失败")
 
 
-    def load_selected_history_log(self):
-        path = self.S26.selected_file()
-        if not path:
-            QMessageBox.information(self, "历史日志", "请先选择一个日志文件。")
-            return
-        try:
+    def _wait_history_log_frame(self, expected_id, predicate, timeout_s, label):
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        while time.monotonic() <= deadline:
+            frame = self._pop_history_log_backlog(expected_id, predicate)
+            if frame is not None:
+                return frame
+            remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
+            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 50))
+            if frames:
+                self.rx_frame_count += len(frames)
+                self._update_rx_status()
+            for frame_index, frame in enumerate(frames):
+                if int(frame.frame_id) != int(expected_id):
+                    continue
+                if predicate(frame):
+                    self._history_log_frame_backlog.extend(
+                        later_frame
+                        for later_frame in frames[frame_index + 1:]
+                        if int(later_frame.frame_id) == int(expected_id)
+                    )
+                    return frame
+                self._history_log_frame_backlog.append(frame)
+            QApplication.processEvents()
+        raise RuntimeError(f"{label}响应超时")
+
+
+    def read_history_log_count(self, cluster_index, log_type):
+        if int(log_type) != self.S26.LOG_TYPE_ALARM:
+            raise RuntimeError("当前下位机CAN日志接口仅支持读取告警日志。")
+        expected_id = self._history_log_response_id(cluster_index)
+        last_error = None
+        for _attempt in range(2):
             try:
-                dataframe = pd.read_csv(path, encoding="gbk")
-            except UnicodeDecodeError:
-                dataframe = pd.read_csv(path, encoding="utf-8")
+                self._flush_can_rx()
+                self._send_history_log_request(cluster_index, 0, log_type)
+                frame = self._wait_history_log_frame(
+                    expected_id,
+                    lambda frame: len(frame.data) >= 4 and frame.data[0] == 0xFF and frame.data[1] == int(log_type),
+                    2.0,
+                    "读取日志总数",
+                )
+                return int(frame.data[2]) | (int(frame.data[3]) << 8)
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.05)
+        raise last_error
+
+
+    def read_history_log_entry(self, cluster_index, log_index, log_type):
+        last_error = None
+        for _attempt in range(2):
+            try:
+                self._flush_can_rx()
+                self._send_history_log_request(cluster_index, log_index, log_type)
+                payload = self._collect_history_log_payload(cluster_index, timeout_s=5.0)
+                return self.decode_history_log_payload(payload, log_type)
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.05)
+        raise last_error
+
+
+    def _collect_history_log_payload(self, cluster_index, timeout_s):
+        expected_id = self._history_log_response_id(cluster_index)
+        deadline = time.monotonic() + max(float(timeout_s), 0.0)
+        chunks = {}
+        while len(chunks) < 8 and time.monotonic() <= deadline:
+            remaining_s = max(deadline - time.monotonic(), 0.0)
+            frame = self._wait_history_log_frame(
+                expected_id,
+                lambda frame: len(frame.data) >= 1 and (frame.data[0] == 0xFE or 1 <= frame.data[0] <= 8),
+                remaining_s,
+                "读取日志数据",
+            )
+            chunk_index = int(frame.data[0])
+            if chunk_index == 0xFE:
+                raise RuntimeError("设备拒绝读取该条历史日志")
+            chunks[chunk_index] = bytes(frame.data[1:8]).ljust(7, b"\x00")
+        missing = [str(index) for index in range(1, 9) if index not in chunks]
+        if missing:
+            raise RuntimeError(f"读取日志数据响应不完整，缺少包: {', '.join(missing)}")
+        return b"".join(chunks[index] for index in range(1, 9))[:52]
+
+
+    def on_history_log_read(self):
+        if not self._history_log_ready():
+            return
+        log_type = self.S26.selected_log_type()
+        if int(log_type) != self.S26.LOG_TYPE_ALARM:
+            self.S26.clear_records()
+            self.S26.set_status("当前下位机CAN接口暂仅支持读取告警日志。", failed=True)
+            return
+        self.history_log_stop_requested = False
+        self.S26.clear_records()
+        self.S26.set_reading(True)
+        self.S26.set_status("正在读取日志总数...")
+
+        active_timers = self._pause_history_log_timers()
+        total_count = 0
+        read_count = 0
+        error_count = 0
+        try:
+            cluster_index = self._active_cluster_index()
+            total_count = self.read_history_log_count(cluster_index, log_type)
+            self.S26.set_counts(total_count, 0)
+            if total_count <= 0:
+                self.S26.set_status("设备暂无历史日志")
+                return
+            for log_index in range(total_count, 0, -1):
+                if self.history_log_stop_requested:
+                    self.S26.set_status(f"已停止，成功读取 {read_count} 条，失败 {error_count} 条")
+                    break
+                self.S26.set_status(f"正在读取第 {log_index} 条...")
+                QApplication.processEvents()
+                try:
+                    record = self.read_history_log_entry(cluster_index, log_index, log_type)
+                except Exception as exc:
+                    error_count += 1
+                    self.S26.set_counts(total_count, read_count)
+                    self.S26.set_status(f"第 {log_index} 条读取失败: {exc}", failed=True)
+                    QApplication.processEvents()
+                    continue
+                read_count += 1
+                self.S26.append_record(record)
+                self.S26.set_counts(total_count, read_count)
+                QApplication.processEvents()
+            if not self.history_log_stop_requested:
+                self.S26.set_status(f"日志读取正常，成功 {read_count} 条，失败 {error_count} 条")
         except Exception as exc:
-            self.S26.set_status_text(f"加载失败: {exc}")
-            QMessageBox.warning(self, "历史日志加载失败", str(exc))
-            return
-        self.history_log_dataframe = dataframe
-        self.S26.set_table_data(dataframe.columns.tolist(), dataframe.fillna("").values.tolist())
-        self.S26.set_status_text(f"已加载 {os.path.basename(path)}，共 {len(dataframe)} 行。")
+            self.S26.set_status(f"读取失败: {exc}", failed=True)
+            QMessageBox.critical(self, "读取历史日志失败", str(exc))
+        finally:
+            self.S26.set_reading(False)
+            self.history_log_stop_requested = False
+            self._resume_history_log_timers(active_timers)
 
 
-    def export_history_log_table(self):
-        dataframe = getattr(self, "history_log_dataframe", None)
-        if dataframe is None or dataframe.empty:
-            QMessageBox.information(self, "历史日志", "当前没有可另存的历史日志数据。")
+    def on_history_log_stop(self):
+        self.history_log_stop_requested = True
+        self.S26.set_status("正在停止读取...")
+
+
+    def on_history_log_save(self):
+        if not self.S26.records:
+            QMessageBox.information(self, "没有可保存的日志", "当前表格没有历史日志数据。")
             return
-        path = self.S26.choose_export_path()
+        path = self.S26.choose_save_path()
         if not path:
             return
         try:
-            dataframe.to_csv(path, index=False, encoding="utf-8-sig")
+            self.S26.save_records_to_csv(path)
         except Exception as exc:
-            QMessageBox.warning(self, "历史日志另存失败", str(exc))
+            QMessageBox.critical(self, "保存历史日志失败", str(exc))
             return
-        self.S26.set_status_text(f"已另存历史日志: {path}")
+        self.S26.set_status(f"日志已保存: {path}")
 
 
-    def clear_history_log_table(self):
-        self.history_log_dataframe = None
-        self.S26.clear_table()
-        self.S26.set_status_text("已清空当前历史日志表格。")
+    def on_history_log_clear_table(self):
+        self.S26.clear_records()
 
 
-    def open_history_log_dir(self):
-        log_dir = self._history_log_dir()
-        os.makedirs(log_dir, exist_ok=True)
-        os.startfile(log_dir)
+    def on_history_log_clear_device(self):
+        if not self._history_log_ready():
+            return
+        log_type = self.S26.selected_log_type()
+        para2 = 6 if int(log_type) == self.S26.LOG_TYPE_ALARM else 7
+        log_type_text = "告警日志" if int(log_type) == self.S26.LOG_TYPE_ALARM else "其他日志"
+        reply = QMessageBox.question(
+            self,
+            "清空历史日志",
+            f"确认清空簇{self._active_cluster_index()} ({self.selected_cluster_address}) 的{log_type_text}？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        active_timers = self._pause_history_log_timers()
+        try:
+            self._flush_can_rx()
+            data = [4, 0, 0, 0, para2, 0, 0, 0]
+            self.CtrlData(self._active_cluster_index(), data)
+            expected_id = self._history_log_response_id(self._active_cluster_index(), response_pf=0x89)
+            self._wait_history_log_frame(
+                expected_id,
+                lambda frame: len(frame.data) >= 1,
+                1.0,
+                "清空历史日志",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "清空历史日志失败", str(exc))
+            return
+        finally:
+            self._resume_history_log_timers(active_timers)
+        self.S26.clear_records()
+        self.S26.set_status("设备历史日志已清空")
+
+
+    @staticmethod
+    def _u16(payload, offset):
+        return int.from_bytes(payload[offset:offset + 2], byteorder="little", signed=False)
+
+
+    @staticmethod
+    def _s16(payload, offset):
+        return int.from_bytes(payload[offset:offset + 2], byteorder="little", signed=True)
+
+
+    @staticmethod
+    def _u32(payload, offset):
+        return int.from_bytes(payload[offset:offset + 4], byteorder="little", signed=False)
+
+
+    @staticmethod
+    def _decode_history_time(raw_time):
+        year = 2000 + (raw_time & 0x3F)
+        month = (raw_time >> 6) & 0x0F
+        day = (raw_time >> 10) & 0x1F
+        hour = (raw_time >> 15) & 0x1F
+        minute = (raw_time >> 20) & 0x3F
+        second = (raw_time >> 26) & 0x3F
+        if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59 and second <= 59):
+            return "--"
+        return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+
+
+    @staticmethod
+    def _decode_relay_status(relay_byte):
+        active_relays = [
+            f"{index}继电器闭合"
+            for index in range(1, 9)
+            if int(relay_byte) & (1 << (index - 1))
+        ]
+        return "，".join(active_relays) if active_relays else "0"
+
+
+    @staticmethod
+    def _history_log_subtype_text(subtype):
+        subtype_text = {
+            3: "告警产生",
+            4: "告警消失",
+            8: "清空历史事件日志",
+            9: "清空实时数据日志",
+            10: "保存参数到FLASH",
+            11: "保存校准系数",
+            12: "设置时间",
+            13: "PAR类索引修改",
+        }
+        return subtype_text.get(int(subtype), f"子类型{subtype}")
+
+
+    @staticmethod
+    def _decode_history_alarm_position(alarm_info):
+        cell_no = alarm_info & 0x7F
+        bsu_no = (alarm_info >> 7) & 0x7F
+        equip_type = (alarm_info >> 14) & 0x0F
+        bat_no = (alarm_info >> 31) & 0x01
+        return f"BCU: {equip_type:03d}---CSU: {bsu_no:03d}---Cell: {cell_no:03d}---Bat: {bat_no}"
+
+
+    @staticmethod
+    def _decode_log_cell_voltage_info(raw_value):
+        cell_voltage = raw_value & 0x3FFF
+        bcu_no = (raw_value >> 14) & 0x3F
+        csu_no = (raw_value >> 20) & 0x3F
+        cell_no = (raw_value >> 26) & 0x3F
+        return cell_voltage, f"BCU:{bcu_no:03d}|CSU:{csu_no:03d}|Cell:{cell_no:03d}"
+
+
+    @classmethod
+    def _decode_log_cell_temperature_info(cls, payload, offset):
+        cell_temperature = cls._s16(payload, offset) / 10.0
+        position = cls._u16(payload, offset + 2)
+        bcu_no = position & 0x1F
+        csu_no = (position >> 5) & 0x1F
+        cell_no = (position >> 10) & 0x3F
+        return cell_temperature, f"BCU:{bcu_no:03d}|CSU:{csu_no:03d}|Cell:{cell_no:03d}"
+
+
+    def _history_log_alarm_name(self, alarm_id):
+        alarm_id = int(alarm_id)
+        if alarm_id <= 0:
+            return "-"
+        names = list(config.get("Alarm_name_key", {}).keys())
+        index = alarm_id - 1
+        if 0 <= index < len(names):
+            return str(names[index])
+        return f"告警{alarm_id:03d}"
+
+
+    def decode_history_log_payload(self, payload, log_type):
+        payload = bytes(payload)
+        if len(payload) < 52:
+            raise RuntimeError(f"历史日志数据长度不足: {len(payload)} < 52")
+
+        sequence = self._u16(payload, 0)
+        subtype = payload[2]
+        run_status = payload[3]
+        relay_byte = payload[8]
+        alarm_count = payload[9]
+        raw_word = self._u16(payload, 10)
+        alarm_info = self._u32(payload, 12)
+        alarm_id = (alarm_info >> 24) & 0x3F
+        alarm_level = (alarm_info >> 18) & 0x3F
+        max_cell_voltage, max_cell_voltage_position = self._decode_log_cell_voltage_info(
+            self._u32(payload, 32)
+        )
+        min_cell_voltage, min_cell_voltage_position = self._decode_log_cell_voltage_info(
+            self._u32(payload, 36)
+        )
+        max_cell_temperature, max_cell_temperature_position = self._decode_log_cell_temperature_info(
+            payload,
+            40,
+        )
+        min_cell_temperature, min_cell_temperature_position = self._decode_log_cell_temperature_info(
+            payload,
+            44,
+        )
+
+        return HistoryLogRecord(
+            sequence=sequence,
+            timestamp=self._decode_history_time(self._u32(payload, 4)),
+            log_type="告警日志" if int(log_type) == self.S26.LOG_TYPE_ALARM else "其他日志",
+            log_subtype=self._history_log_subtype_text(subtype),
+            run_status=run_status,
+            relay_status=self._decode_relay_status(relay_byte),
+            alarm_count=alarm_count,
+            raw_word=raw_word,
+            alarm_id=alarm_id,
+            alarm_name=self._history_log_alarm_name(alarm_id),
+            alarm_level=alarm_level,
+            alarm_position=self._decode_history_alarm_position(alarm_info),
+            total_voltage=self._u16(payload, 16) / 10.0,
+            total_current=self._s16(payload, 18) / 10.0,
+            soc=self._u16(payload, 20) / 10.0,
+            soh=self._u16(payload, 22) / 10.0,
+            p_bus_resistance=self._u16(payload, 24),
+            n_bus_resistance=self._u16(payload, 26),
+            diff_voltage=self._u16(payload, 28),
+            diff_temperature=self._u16(payload, 30) / 10.0,
+            max_cell_voltage=max_cell_voltage,
+            max_cell_voltage_position=max_cell_voltage_position,
+            min_cell_voltage=min_cell_voltage,
+            min_cell_voltage_position=min_cell_voltage_position,
+            max_cell_temperature=max_cell_temperature,
+            max_cell_temperature_position=max_cell_temperature_position,
+            min_cell_temperature=min_cell_temperature,
+            min_cell_temperature_position=min_cell_temperature_position,
+            threshold_value=self._s16(payload, 48),
+            actual_value=self._s16(payload, 50),
+            raw_payload=payload[:52],
+        )
 
 
     def DIState(self):
