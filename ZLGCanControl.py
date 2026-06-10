@@ -249,6 +249,7 @@ class Communication:
         self._device_opened = False
         self.run_flag = False
         self.debug = False
+        self.log_manager = None
         self._lock = threading.RLock()
 
     def _error_msg(self, msg: str):
@@ -467,7 +468,28 @@ class Communication:
                 )
             )
         self.last_received_frames = frames
+        self._log_rx_frames(frames)
         return frames
+
+    def _log_rx_frames(self, frames):
+        log_manager = getattr(self, "log_manager", None)
+        if log_manager is None:
+            return
+        for frame in frames:
+            try:
+                log_manager.log_rx("rx_can", frame)
+            except Exception as exc:
+                self.last_error = f"log CAN RX failed: {exc}"
+                return
+
+    def _log_tx_frame(self, frame, result):
+        log_manager = getattr(self, "log_manager", None)
+        if log_manager is None:
+            return
+        try:
+            log_manager.log_tx("tx_can", f"dev{self.CanIndex}/ch{self.Chn}", frame, result)
+        except Exception as exc:
+            self.last_error = f"log CAN TX failed: {exc}"
 
     def thread_begin(self):
         self.run_flag = True
@@ -506,6 +528,15 @@ class Communication:
         config = self._active_config()
         with self._lock:
             result = self.dll.VCI_Transmit(config.CanType, config.CanIndex, config.Chn, pointer(frame), 1)
+        self._log_tx_frame(
+            RawCanFrame(
+                frame_id=int(ID),
+                data=bytes(payload),
+                extern_flag=bool(extern_flag),
+                remote_flag=bool(remote_flag),
+            ),
+            result,
+        )
         if result != 1:
             self.last_error = f"send CAN frame failed: id=0x{int(ID):X}, result={result}"
             if self.debug:

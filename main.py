@@ -11,11 +11,11 @@ import json
 from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
 from UI.T33 import HistoryLogRecord
+from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
 import yaml
 from UI.conf import config
-import pandas as pd
 import os
 import copy
 from SIGNAL import *
@@ -56,7 +56,7 @@ Alarm_list = [[0 for _ in range(32)] for _ in range(64)]
 
 BAL_JG_LEN = 20*10+64
 
-time_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+RUNTIME_LOG_SIGNAL_NAMES = [name for name in ResDataRec.keys() if name != "时间"]
 
 #ABNORM_ADDR = 0x9098D-2
 ABNORM_ADDR = 0x90901
@@ -252,7 +252,12 @@ class Edit(Ui_Form, QWidget):
         self.product_command_layout.addWidget(self.baud_rate_spinbox)
 
         self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
+        self.save_log_checkbox.toggled.connect(self.on_save_log_toggled)
         self.product_command_layout.addWidget(self.save_log_checkbox)
+        self.log_status_label = QLabel("日志: 关 / 当前簇", self.product_command_bar)
+        self.log_status_label.setObjectName("statusPill")
+        self.log_status_label.setProperty("status", "warning")
+        self.product_command_layout.addWidget(self.log_status_label)
 
         self.apply_bus_button = QPushButton("应用并重连", self.product_command_bar)
         self.apply_bus_button.setObjectName("primaryButton")
@@ -484,6 +489,10 @@ class Edit(Ui_Form, QWidget):
         VresTem = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_Tem_NUM"])))]
         VresDXYC = [0 for _ in range(0, int(config["LECU_NUM"] * int(config["CELL_NUM"])))]
         Alarm_list = [[0 for _ in range(32)] for _ in range(64)]
+        self.voltage_snapshot_dirty = False
+        self.temperature_snapshot_dirty = False
+        self.balance_snapshot_dirty = False
+        self.abnormal_snapshot_dirty = False
 
 
     def _clear_current_cluster_tables(self):
@@ -571,6 +580,7 @@ class Edit(Ui_Form, QWidget):
         self.channel_index_spinbox.setValue(int(can_config.get("chn", 1)))
         self.baud_rate_spinbox.setValue(int(can_config.get("baud_rate", 500)))
         self.save_log_checkbox.setChecked(int(config.get("SAVE_LOG", 0)) == 1)
+        self._update_log_status()
 
 
     def _current_bus_config(self):
@@ -632,6 +642,87 @@ class Edit(Ui_Form, QWidget):
             f"RX: {getattr(self, 'rx_frame_count', 0)}",
             "info",
         )
+
+
+    def _runtime_log_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "hisData")
+
+
+    def _log_cluster_indices(self):
+        addresses = list(config.get("ADDRESLIST", []))
+        cluster_count = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
+        return list(range(1, cluster_count + 1))
+
+
+    def _log_cluster_addresses(self):
+        return [self._cluster_address(index) for index in self._log_cluster_indices()]
+
+
+    def _ensure_session_log_manager(self):
+        manager = getattr(self, "session_log_manager", None)
+        if manager is None:
+            manager = SessionLogManager(
+                self._runtime_log_dir(),
+                cluster_indices=self._log_cluster_indices(),
+                cluster_addresses=self._log_cluster_addresses(),
+                runtime_signal_names=RUNTIME_LOG_SIGNAL_NAMES,
+                voltage_count=int(config["LECU_NUM"]) * int(config["CELL_NUM"]),
+                temperature_count=int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"]),
+                balance_module_count=int(config["LECU_NUM"]),
+                balance_cells_per_module=int(config["CELL_NUM"]),
+                abnormal_count=int(config["LECU_NUM"]) * int(config["CELL_NUM"]),
+                enabled=False,
+            )
+            self.session_log_manager = manager
+        return manager
+
+
+    def _logging_enabled(self):
+        checkbox = getattr(self, "save_log_checkbox", None)
+        return bool(checkbox is not None and checkbox.isChecked())
+
+
+    def _attach_log_manager_to_can(self):
+        can_device = getattr(self, "c", None)
+        if can_device is not None:
+            can_device.log_manager = self._ensure_session_log_manager()
+
+
+    def _update_log_status(self):
+        enabled = self._logging_enabled()
+        manager = getattr(self, "session_log_manager", None)
+        text = f"日志: {'开' if enabled else '关'} / 当前簇"
+        label = getattr(self, "log_status_label", None)
+        self._set_status_pill(
+            label,
+            text,
+            "success" if enabled else "warning",
+        )
+        if label is not None:
+            if enabled and manager is not None and manager.enabled:
+                label.setToolTip(f"当前日志会话: {manager.session_name}\n目录: {self._runtime_log_dir()}")
+            else:
+                label.setToolTip("日志未开启")
+
+
+    def on_save_log_toggled(self, checked):
+        config["SAVE_LOG"] = 1 if checked else 0
+        manager = self._ensure_session_log_manager()
+        manager.set_enabled(checked)
+        self._attach_log_manager_to_can()
+        timer = getattr(self, "timerResData", None)
+        if timer is not None:
+            if checked and getattr(self, "can_ready", False):
+                timer.start(1000)
+            else:
+                timer.stop()
+        self._update_log_status()
+
+
+    def _close_session_log(self):
+        manager = getattr(self, "session_log_manager", None)
+        if manager is not None:
+            manager.close()
 
 
     def _set_factory_status(self, mode_value=None, text=None, status=None):
@@ -1176,8 +1267,11 @@ class Edit(Ui_Form, QWidget):
         self.send_time.start(200)
         self.send_time1.start(10)
         self.timer1.start(10)
-        if int(config.get("SAVE_LOG", 0)) == 1 and self.save_log_checkbox.isChecked():
+        if self._logging_enabled():
+            self._ensure_session_log_manager().set_enabled(True)
+            self._attach_log_manager_to_can()
             self.timerResData.start(1000)
+        self._update_log_status()
 
 
     def _close_can_device(self):
@@ -1185,6 +1279,7 @@ class Edit(Ui_Form, QWidget):
         can_device = getattr(self, "c", None)
         if can_device is not None:
             try:
+                can_device.log_manager = None
                 can_device.close()
             except Exception as exc:
                 print(f"close CAN failed: {exc}")
@@ -1205,6 +1300,7 @@ class Edit(Ui_Form, QWidget):
                 print(f"close old CAN failed: {exc}")
 
         self.c = Communication()
+        self._attach_log_manager_to_can()
         stat, msg = self.c.set_can_board_configuration(
             can_type=can_config["can_type"],
             can_idx=can_config["can_idx"],
@@ -1242,6 +1338,7 @@ class Edit(Ui_Form, QWidget):
 
     def closeEvent(self, event):
         self._close_can_device()
+        self._close_session_log()
         super().closeEvent(event)
 
 
@@ -1374,9 +1471,6 @@ class Edit(Ui_Form, QWidget):
         self.BAL_index = 0
         self.DXYC_index= 0
 
-        self.LOGINDEX = 0;
-
-
         #参数查询
         #BCU参数查询1
         self.S23.pushButton_14.clicked.connect(lambda:self.BCUVARSearch(1))
@@ -1424,8 +1518,11 @@ class Edit(Ui_Form, QWidget):
         self.last_dy_time = 0
         self.last_bal_time = 0
         self.last_tem_time = 0
+        self.voltage_snapshot_dirty = False
+        self.temperature_snapshot_dirty = False
+        self.balance_snapshot_dirty = False
+        self.abnormal_snapshot_dirty = False
 
-        self.ResData = [copy.deepcopy(ResData) for i in range(config["BCU_NUM"]+1)]
         self.ResDataRec =[copy.deepcopy(ResDataRec) for i in range(config["BCU_NUM"]+1)]
 
 
@@ -2179,6 +2276,7 @@ class Edit(Ui_Form, QWidget):
                     if now - self.last_dy_time > 1.0:  # 每1秒最多处理一次
                         self.last_dy_time = now
                         self.S18.setVoltageValues(Vres)
+                        self.voltage_snapshot_dirty = True
 
 
             if (("0x1235EF" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
@@ -2195,6 +2293,7 @@ class Edit(Ui_Form, QWidget):
                     if now - self.last_tem_time > 1.0:  # 每1秒最多处理一次
                         self.last_tem_time = now
                         self.S20.setVoltageValues(VresTem)
+                        self.temperature_snapshot_dirty = True
 
 
 
@@ -2228,6 +2327,7 @@ class Edit(Ui_Form, QWidget):
                             self.S19.setVoltageValues(VresBAL)
                             if hasattr(self, "S25"):
                                 self.S25.set_values(VresBAL)
+                            self.balance_snapshot_dirty = True
 
 
             # 电芯异常
@@ -2244,6 +2344,7 @@ class Edit(Ui_Form, QWidget):
                 if now - self.last_dx_time > 1.0:  # 每1秒最多处理一次
                     self.last_dx_time = now
                     self.S24.setVoltageValues(VresDXYC)
+                    self.abnormal_snapshot_dirty = True
 
 
 
@@ -3884,92 +3985,48 @@ class Edit(Ui_Form, QWidget):
 
 
     def SaveRunData(self):
+        if not self._logging_enabled():
+            return
+        cluster_index = self._active_cluster_index()
+        if cluster_index <= 0 or cluster_index >= len(self.ResDataRec):
+            return
 
+        manager = self._ensure_session_log_manager()
+        if not manager.enabled:
+            manager.set_enabled(True)
+        address = self._cluster_address(cluster_index)
 
-        """
-        "时间":[],
-        "霍尔电流":[],
-        "B端电压上半簇":[],
-        "P端电压上半簇":[],
-        "运行状态上半簇":[],
-        "SOC上半簇":[],
-        "最大单体电压上半簇":[],
-        "最小单体电压上半簇":[],
-        "充电继电器上半簇":[],
-        "放电继电器上半簇":[],
-        "最严重告警等级上半簇":[],
-        "OCV更新次数上半簇":[],
-        "最高温度上半簇":[],
-        "最低温度上半簇":[],
-        "分流器电流": [],
-        "B端电压下半簇": [],
-        "P端电压下半簇": [],
-        "运行状态下半簇": [],
-        "SOC下半簇": [],
-        "最大单体电压下半簇": [],
-        "最小单体电压下半簇": [],
-        "充电继电器下半簇": [],
-        "放电继电器下半簇":[],
-        "最严重告警等级下半簇":[],
-        "OCV更新次数下半簇": [],
-        "最高温度下半簇": [],
-        "最低温度下半簇": [],
-        "B端电压整簇":[],
-        "P端电压整簇":[],
-        "SOH":[],
-
-        :return:
-        """
-        time_now = int(time.time())
-
-        if not os.path.exists("./hisData"):
-            os.makedirs("./hisData")
-
-        #保存各簇的实时运行数据、
-        for index in range(1,config["BCU_NUM"]+1):
-            data_his = "簇{0}运行数据{1}_{2}.csv".format(index,time_str,self.LOGINDEX)
-            if os.path.exists("./hisData/"+data_his):
-                DH = pd.read_csv("./hisData/"+data_his,encoding="gbk")
-            else:
-                DH = pd.DataFrame(ResData)
-            self.ResData[index]["时间"].append(time_now)
-            self.ResData[index]["霍尔电流"].append(self.ResDataRec[index]["霍尔电流"])
-            self.ResData[index]["B端电压上半簇"].append(self.ResDataRec[index]["B端电压上半簇"])
-            self.ResData[index]["P端电压上半簇"].append(self.ResDataRec[index]["P端电压上半簇"])
-            self.ResData[index]["运行状态上半簇"].append(self.ResDataRec[index]["运行状态上半簇"])
-            self.ResData[index]["SOC上半簇"].append(self.ResDataRec[index]["SOC上半簇"])
-            self.ResData[index]["最大单体电压上半簇"].append(self.ResDataRec[index]["最大单体电压上半簇"])
-            self.ResData[index]["最小单体电压上半簇"].append(self.ResDataRec[index]["最小单体电压上半簇"])
-            self.ResData[index]["充电继电器上半簇"].append(self.ResDataRec[index]["充电继电器上半簇"])
-            self.ResData[index]["放电继电器上半簇"].append(self.ResDataRec[index]["放电继电器上半簇"])
-            self.ResData[index]["最严重告警等级上半簇"].append(self.ResDataRec[index]["最严重告警等级上半簇"])
-            self.ResData[index]["OCV更新次数上半簇"].append(self.ResDataRec[index]["OCV更新次数上半簇"])
-            self.ResData[index]["最高温度上半簇"].append(self.ResDataRec[index]["最高温度上半簇"])
-            self.ResData[index]["最低温度上半簇"].append(self.ResDataRec[index]["最低温度上半簇"])
-            self.ResData[index]["分流器电流"].append(self.ResDataRec[index]["分流器电流"])
-            self.ResData[index]["B端电压下半簇"].append(self.ResDataRec[index]["B端电压下半簇"])
-            self.ResData[index]["P端电压下半簇"].append(self.ResDataRec[index]["P端电压下半簇"])
-            self.ResData[index]["运行状态下半簇"].append(self.ResDataRec[index]["运行状态下半簇"])
-            self.ResData[index]["SOC下半簇"].append(self.ResDataRec[index]["SOC下半簇"])
-            self.ResData[index]["最大单体电压下半簇"].append(self.ResDataRec[index]["最大单体电压下半簇"])
-            self.ResData[index]["最小单体电压下半簇"].append(self.ResDataRec[index]["最小单体电压下半簇"])
-            self.ResData[index]["充电继电器下半簇"].append(self.ResDataRec[index]["充电继电器下半簇"])
-            self.ResData[index]["放电继电器下半簇"].append(self.ResDataRec[index]["放电继电器下半簇"])
-            self.ResData[index]["最严重告警等级下半簇"].append(self.ResDataRec[index]["最严重告警等级下半簇"])
-            self.ResData[index]["OCV更新次数下半簇"].append(self.ResDataRec[index]["OCV更新次数下半簇"])
-            self.ResData[index]["最高温度下半簇"].append(self.ResDataRec[index]["最高温度上半簇"])
-            self.ResData[index]["最低温度下半簇"].append(self.ResDataRec[index]["最低温度下半簇"])
-            self.ResData[index]["B端电压整簇"].append(self.ResDataRec[index]["B端电压整簇"])
-            self.ResData[index]["P端电压整簇"].append(self.ResDataRec[index]["P端电压整簇"])
-            self.ResData[index]["SOH"].append(self.ResDataRec[index]["SOH"])
-
-            df = pd.concat([DH, pd.DataFrame(self.ResData[index])], ignore_index=True)
-
-        # 保存到文件
-            df.to_csv("./hisData/"+data_his, index=False,encoding="gbk")
-        self.ResData = [copy.deepcopy(ResData) for i in range(config["BCU_NUM"]+1)]
-        if(len(df)>10000):
-            self.LOGINDEX+=1
+        try:
+            manager.write_cluster_snapshot(cluster_index, self.ResDataRec[cluster_index])
+            if self.voltage_snapshot_dirty:
+                manager.write_voltage_snapshot(address, list(Vres))
+                self.voltage_snapshot_dirty = False
+            if self.temperature_snapshot_dirty:
+                manager.write_temperature_snapshot(address, list(VresTem))
+                self.temperature_snapshot_dirty = False
+            if self.balance_snapshot_dirty:
+                manager.write_balance_snapshot(address, list(VresBAL))
+                self.balance_snapshot_dirty = False
+            if self.abnormal_snapshot_dirty:
+                manager.write_abnormal_snapshot(address, list(VresDXYC))
+                self.abnormal_snapshot_dirty = False
+        except Exception as exc:
+            timer = getattr(self, "timerResData", None)
+            if timer is not None:
+                timer.stop()
+            manager.set_enabled(False)
+            config["SAVE_LOG"] = 0
+            checkbox = getattr(self, "save_log_checkbox", None)
+            if checkbox is not None:
+                blocker = QtCore.QSignalBlocker(checkbox)
+                checkbox.setChecked(False)
+                del blocker
+            self._set_status_pill(
+                getattr(self, "log_status_label", None),
+                f"日志: 写入失败 {exc}",
+                "danger",
+            )
+            print(f"save runtime log failed: {exc}")
 
 
 
