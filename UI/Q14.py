@@ -19,6 +19,8 @@ from .T28 import MainWindow as UI28
 from  .T29 import Ui_Form as UI29
 from  .T30 import  Ui_Form as UI30
 from  .T31 import BatteryMonitorBAL as UI31
+from .T32 import BalanceControlPage as UI32
+from .T33 import HistoryLogPage as UI33
 
 
 import yaml
@@ -162,7 +164,7 @@ class Ui_Form(object):
         self.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+8)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+10)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
@@ -175,6 +177,8 @@ class Ui_Form(object):
         self.S22 = UI29()
         self.S23 = UI30()
         self.S24 = UI31()
+        self.S25 = UI32()
+        self.S26 = UI33()
 
         self.S17.setupUi(self.tab[CU_NUM])
 
@@ -196,6 +200,12 @@ class Ui_Form(object):
 
         layout = QVBoxLayout(self.tab[CU_NUM+7])
         layout.addWidget(self.S24)
+
+        layout = QVBoxLayout(self.tab[CU_NUM+8])
+        layout.addWidget(self.S25)
+
+        layout = QVBoxLayout(self.tab[CU_NUM+9])
+        layout.addWidget(self.S26)
 
 
 
@@ -230,9 +240,10 @@ class Ui_Form(object):
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
 
-        for i in range(0,CU_NUM+8):
+        for i in range(0,CU_NUM+10):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
+            self.tabWidget.tabBar().setTabVisible(0, False)
             for i in range(2, CU_NUM - 1):
                 self.tabWidget.tabBar().setTabVisible(i, False)
 
@@ -240,7 +251,7 @@ class Ui_Form(object):
         #self.retranslateUi(Form)
 
 
-        self.tabWidget.setCurrentIndex(0)
+        self.tabWidget.setCurrentIndex(1)
         #QtCore.QMetaObject.connectSlotsByName(Form)
 
         #self.tabCT =
@@ -264,7 +275,7 @@ class Ui_Form(object):
             self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[i]),"簇"+str(i))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[0]), "00")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM-1]), "BAU")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM]), "控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM]), "主机控制")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+1]), "单体电压")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+2]), "均衡")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "单体温度")
@@ -272,6 +283,8 @@ class Ui_Form(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "DI状态")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "参数管理")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 7]), "电芯异常")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 8]), "均衡控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM + 9]), "历史日志")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 

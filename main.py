@@ -245,8 +245,6 @@ class Edit(Ui_Form, QWidget):
         addresses = list(config.get("ADDRESLIST", []))
         max_cluster_index = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
         options = []
-        if addresses:
-            options.append((0, str(addresses[0]).upper()))
         for cluster_index in range(1, max_cluster_index + 1):
             options.append((cluster_index, str(addresses[cluster_index]).upper()))
         return options
@@ -311,6 +309,14 @@ class Edit(Ui_Form, QWidget):
 
     def _abnormal_cell_tab_index(self):
         return config["BCU_NUM"] + 9
+
+
+    def _balance_control_tab_index(self):
+        return config["BCU_NUM"] + 10
+
+
+    def _history_log_tab_index(self):
+        return config["BCU_NUM"] + 11
 
 
     def _valid_cluster_indices(self):
@@ -410,6 +416,8 @@ class Edit(Ui_Form, QWidget):
             self.tabWidget.setTabText(self.CLUSTER_TAB_INDEX, "簇")
         tab_bar = self.tabWidget.tabBar()
         if hasattr(tab_bar, "setTabVisible"):
+            if self.ZERO_TAB_INDEX < self.tabWidget.count():
+                tab_bar.setTabVisible(self.ZERO_TAB_INDEX, False)
             for tab_index in range(self.CLUSTER_TAB_INDEX + 1, config["BCU_NUM"] + 1):
                 if tab_index < self.tabWidget.count():
                     tab_bar.setTabVisible(tab_index, False)
@@ -449,6 +457,8 @@ class Edit(Ui_Form, QWidget):
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
         self.S20currentIndexChangedTem()
+        if hasattr(self, "S25"):
+            self.S25.set_values([])
         if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
@@ -475,15 +485,16 @@ class Edit(Ui_Form, QWidget):
             self._sync_page_cluster_combo_boxes(cluster_index)
             if hasattr(self, "S21"):
                 self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S25"):
+                self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
 
             if (
                 source in ("top", "init")
                 and hasattr(self, "tabWidget")
                 and getattr(self, "table_index", 0) <= config["BCU_NUM"]
             ):
-                target_tab_index = self.ZERO_TAB_INDEX if cluster_index == 0 else self.CLUSTER_TAB_INDEX
-                self.tabWidget.setCurrentIndex(target_tab_index)
-                self.table_index = target_tab_index
+                self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
+                self.table_index = self.CLUSTER_TAB_INDEX
 
             if previous_index != cluster_index:
                 self._reset_cluster_query_cursors()
@@ -737,6 +748,9 @@ class Edit(Ui_Form, QWidget):
         #均衡控制
         self.S17.pushButton_2.clicked.connect(self.BALANCECtrl)
         self.S17.pushButton_3.clicked.connect(self.BALANCECtrlClose)
+        self.S25.moduleApplyRequested.connect(self.on_balance_control_apply)
+        self.S25.moduleCloseRequested.connect(self.on_balance_control_close_module)
+        self.S25.allCloseRequested.connect(self.on_balance_control_close_all)
 
         #DI状态
         self.timerDI = QTimer(self)
@@ -750,6 +764,11 @@ class Edit(Ui_Form, QWidget):
 
         #参数管理
         self.S23.pushButton.clicked.connect(self.ParProcess)
+        self.S26.refresh_button.clicked.connect(self.refresh_history_log_files)
+        self.S26.load_button.clicked.connect(self.load_selected_history_log)
+        self.S26.export_button.clicked.connect(self.export_history_log_table)
+        self.S26.open_dir_button.clicked.connect(self.open_history_log_dir)
+        self.S26.clear_button.clicked.connect(self.clear_history_log_table)
 
         self.S21.submit_button.clicked.connect(self.on_alarm_parameter_save_flash)
 
@@ -775,7 +794,9 @@ class Edit(Ui_Form, QWidget):
         )
 
 
+        self.history_log_dataframe = None
         self.tabWidget.currentChanged.connect(self.on_tab_changed)
+        self.refresh_history_log_files()
 
         self.BAL_index = 0
         self.DXYC_index= 0
@@ -845,13 +866,11 @@ class Edit(Ui_Form, QWidget):
     def on_tab_changed(self, index):
         # 触发的函数：根据选中的标签页输出信息
         print(f"当前选中的标签页索引: {index}")
-        if self._is_hidden_cluster_tab_index(index):
+        if index == self.ZERO_TAB_INDEX or self._is_hidden_cluster_tab_index(index):
             self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
             return
         self.table_index = index
-        if index == self.ZERO_TAB_INDEX:
-            self._set_active_cluster(index, refresh=False, source="tab")
-        elif index == self.CLUSTER_TAB_INDEX:
+        if index == self.CLUSTER_TAB_INDEX:
             if self._active_cluster_index() == 0:
                 default_option_index = self._default_cluster_option_index()
                 default_cluster_index = self.cluster_options[default_option_index][0]
@@ -909,10 +928,10 @@ class Edit(Ui_Form, QWidget):
                 #     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 #     if ((bauvarid == 0x9040D) and (config["Has_N"])==255):
                 #         config["Has_N"] = byte4 + byte5 * 256
-                if index > 0 and index != self._active_cluster_index():
+                if index != self._active_cluster_index():
                     continue
                 addr = config["ADDRESLIST"][index]
-                display_index = self.ZERO_TAB_INDEX if index == 0 else self.CLUSTER_TAB_INDEX
+                display_index = self.CLUSTER_TAB_INDEX
                 if index-1<config["BCU_NUM"]:
 
                     #带中线
@@ -1632,6 +1651,8 @@ class Edit(Ui_Form, QWidget):
                         if now - self.last_bal_time > 1.0:  # 每1秒最多处理一次
                             self.last_bal_time = now
                             self.S19.setVoltageValues(VresBAL)
+                            if hasattr(self, "S25"):
+                                self.S25.set_values(VresBAL)
 
 
             # 电芯异常
@@ -1950,14 +1971,14 @@ class Edit(Ui_Form, QWidget):
     def S18currentIndexChanged(self):
         if self.table_index == self._voltage_tab_index():
             try:
-                Vres = [0 for i in range(0, 40)]
+                Vres = [0 for i in range(int(config["LECU_NUM"]) * int(config["CELL_NUM"]))]
                 self.S18.setVoltageValues(Vres)
             except:
                 pass
     def S18currentIndexChangedBAL(self):
         if self.table_index == self._balance_tab_index():
             try:
-                VresBAL = [0 for i in range(0, 40)]
+                VresBAL = [0 for i in range(int(config["LECU_NUM"]) * int(config["CELL_NUM"]))]
                 self.S19.setVoltageValues(VresBAL)
             except:
                 pass
@@ -1965,7 +1986,7 @@ class Edit(Ui_Form, QWidget):
     def S20currentIndexChangedTem(self):
         if self.table_index == self._temperature_tab_index():
             try:
-                VresTem = [0 for i in range(0, 40)]
+                VresTem = [0 for i in range(int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"]))]
                 self.S20.setVoltageValues(VresTem)
             except:
                 pass
@@ -2230,8 +2251,8 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBCUVAR(self):
-        if self.table_index in (self.ZERO_TAB_INDEX, self.CLUSTER_TAB_INDEX):
-            index = 0 if self.table_index == self.ZERO_TAB_INDEX else self._active_cluster_index()
+        if self.table_index == self.CLUSTER_TAB_INDEX:
+            index = self._active_cluster_index()
             for i in range(1):
                 #请求剩余充电时间上半簇
 
@@ -2612,10 +2633,9 @@ class Edit(Ui_Form, QWidget):
             self.c.Transmit(0x1888A0F2 + ((Cindex-1) << 8), data, extern_flag=True, data_len=8)
 
     def BALANCECtrlClose(self):
-        AFE_index = self.S17.comboBox_2.currentIndex()
         Cindex = self._active_cluster_index()
-        for i in range(0,4):
-            data = [7, 0, i, 0, 0, 0, 0, 0]
+        for module_index in range(int(config["LECU_NUM"])):
+            data = [7, 0, module_index, 0, 0, 0, 0, 0]
             self.CtrlData(Cindex, data)
 
         self.S17.CB1.setChecked(False)
@@ -2634,6 +2654,106 @@ class Edit(Ui_Form, QWidget):
         self.S17.CB14.setChecked(False)
         self.S17.CB15.setChecked(False)
         self.S17.CB16.setChecked(False)
+
+
+    def _send_balance_mask(self, module_index, enabled_values):
+        if not getattr(self, "can_ready", False):
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再发送均衡控制命令。")
+            return False
+        mask = 0
+        for cell_index, enabled in enumerate(enabled_values):
+            if enabled:
+                mask |= 1 << cell_index
+        data = [7, 0, int(module_index), 0, mask & 0xFF, (mask >> 8) & 0xFF, 0, 0]
+        self.CtrlData(self._active_cluster_index(), data)
+        return True
+
+
+    def on_balance_control_apply(self, module_index, enabled_values):
+        if self._send_balance_mask(module_index, enabled_values):
+            enabled_count = sum(1 for enabled in enabled_values if enabled)
+            self.S25.set_status_text(
+                f"已发送模组 {module_index + 1} 均衡控制命令，开启 {enabled_count} 个单体。"
+            )
+
+
+    def on_balance_control_close_module(self, module_index):
+        if self._send_balance_mask(module_index, [False] * int(config["CELL_NUM"])):
+            self.S25.set_status_text(f"已发送模组 {module_index + 1} 均衡关闭命令。")
+
+
+    def on_balance_control_close_all(self):
+        if not getattr(self, "can_ready", False):
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再发送均衡控制命令。")
+            return
+        for module_index in range(int(config["LECU_NUM"])):
+            self._send_balance_mask(module_index, [False] * int(config["CELL_NUM"]))
+            time.sleep(0.003)
+        self.S25.set_status_text("已发送全部模组均衡关闭命令。")
+
+
+    def _history_log_dir(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "hisData")
+
+
+    def refresh_history_log_files(self):
+        log_dir = self._history_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        files = [
+            os.path.join(log_dir, name)
+            for name in os.listdir(log_dir)
+            if name.lower().endswith(".csv")
+        ]
+        files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+        self.S26.set_files(files)
+        self.S26.set_status_text(f"已发现 {len(files)} 个历史日志文件。")
+
+
+    def load_selected_history_log(self):
+        path = self.S26.selected_file()
+        if not path:
+            QMessageBox.information(self, "历史日志", "请先选择一个日志文件。")
+            return
+        try:
+            try:
+                dataframe = pd.read_csv(path, encoding="gbk")
+            except UnicodeDecodeError:
+                dataframe = pd.read_csv(path, encoding="utf-8")
+        except Exception as exc:
+            self.S26.set_status_text(f"加载失败: {exc}")
+            QMessageBox.warning(self, "历史日志加载失败", str(exc))
+            return
+        self.history_log_dataframe = dataframe
+        self.S26.set_table_data(dataframe.columns.tolist(), dataframe.fillna("").values.tolist())
+        self.S26.set_status_text(f"已加载 {os.path.basename(path)}，共 {len(dataframe)} 行。")
+
+
+    def export_history_log_table(self):
+        dataframe = getattr(self, "history_log_dataframe", None)
+        if dataframe is None or dataframe.empty:
+            QMessageBox.information(self, "历史日志", "当前没有可另存的历史日志数据。")
+            return
+        path = self.S26.choose_export_path()
+        if not path:
+            return
+        try:
+            dataframe.to_csv(path, index=False, encoding="utf-8-sig")
+        except Exception as exc:
+            QMessageBox.warning(self, "历史日志另存失败", str(exc))
+            return
+        self.S26.set_status_text(f"已另存历史日志: {path}")
+
+
+    def clear_history_log_table(self):
+        self.history_log_dataframe = None
+        self.S26.clear_table()
+        self.S26.set_status_text("已清空当前历史日志表格。")
+
+
+    def open_history_log_dir(self):
+        log_dir = self._history_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        os.startfile(log_dir)
 
 
     def DIState(self):
