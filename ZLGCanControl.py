@@ -77,6 +77,7 @@ class RawCanFrame:
 def _resolve_dll_path():
     current_dir = Path(__file__).resolve().parent
     candidates = [
+        Path(sys.executable).resolve().parent / "ControlCAN.dll" if getattr(sys, "frozen", False) else None,
         Path(sys._MEIPASS) / "ControlCAN.dll" if hasattr(sys, "_MEIPASS") else None,
         current_dir / "ControlCAN.dll",
         Path.cwd() / "ControlCAN.dll",

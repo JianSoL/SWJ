@@ -1,11 +1,35 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import glob
+
+
+def _first_existing(pattern):
+    matches = sorted(glob.glob(pattern))
+    return matches[-1] if matches else None
+
+
+vc90_binaries = []
+for dll_pattern in (
+    r'C:\Windows\WinSxS\amd64_microsoft.vc90.crt_*\msvcr90.dll',
+    r'C:\Windows\WinSxS\amd64_microsoft.vc90.mfc_*\mfc90.dll',
+):
+    dll_path = _first_existing(dll_pattern)
+    if dll_path:
+        vc90_binaries.append((dll_path, '.'))
+
 
 a = Analysis(
     ['main.py'],
-    pathex=['P:\\Anconda\\envs\\QT\\Lib\\site-packages\\PyQt6\\Qt6\\bin'],
-    binaries=[],
-    datas=[],
+    pathex=[],
+    binaries=[
+        ('ControlCAN.dll', '.'),
+    ] + vc90_binaries,
+    datas=[
+        ('conf.yaml', '.'),
+        ('UI/release_theme.qss', 'UI'),
+        ('UI/style.qss', 'UI'),
+        ('alarm.wav', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

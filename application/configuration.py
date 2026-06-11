@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sys
 
 
 DEFAULT_CAN_BOARD_CONFIG = {
@@ -12,6 +13,8 @@ DEFAULT_CAN_BOARD_CONFIG = {
 
 
 def project_root():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[1]
 
 

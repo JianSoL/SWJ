@@ -23,11 +23,8 @@ from .T32 import BalanceControlPage as UI32
 from .T33 import HistoryLogPage as UI33
 from .T34 import RealtimeMonitorPage as UI34
 from .T35 import ActiveAlarmPage as UI35
+from .conf import config
 
-
-import yaml
-with open('./conf.yaml', 'r', encoding='utf-8') as file:
-    config = yaml.safe_load(file)["Test_4_10"]
 CU_NUM = config["BCU_NUM"]+2
 
 
