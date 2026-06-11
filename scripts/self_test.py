@@ -115,6 +115,24 @@ def test_main_window_offscreen_logging():
     app = QApplication.instance() or QApplication([])
     window = main_module.Edit()
     try:
+        _assert(
+            all(window.cluster_selector.itemData(index) > 0 for index in range(window.cluster_selector.count())),
+            "top cluster selector should not expose 00 cluster index",
+        )
+
+        original_bcu_num = main_module.config["BCU_NUM"]
+        original_address_list = list(main_module.config["ADDRESLIST"])
+        try:
+            main_module.config["BCU_NUM"] = 5
+            main_module.config["ADDRESLIST"] = ["00", "A0", "00", "0x00", "A3", ""]
+            _assert(
+                window._build_cluster_options() == [(1, "A0"), (4, "A3")],
+                "uncompiled 00 addresses should be filtered from cluster options",
+            )
+        finally:
+            main_module.config["BCU_NUM"] = original_bcu_num
+            main_module.config["ADDRESLIST"] = original_address_list
+
         with tempfile.TemporaryDirectory(prefix="aidc_ui_log_test_") as temp_dir:
             window._runtime_log_dir = lambda: temp_dir
             window._set_active_cluster(1, refresh=False, source="self_test")

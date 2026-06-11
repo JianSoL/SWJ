@@ -285,8 +285,18 @@ class Edit(Ui_Form, QWidget):
         max_cluster_index = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
         options = []
         for cluster_index in range(1, max_cluster_index + 1):
-            options.append((cluster_index, str(addresses[cluster_index]).upper()))
+            address = str(addresses[cluster_index]).upper()
+            if self._is_compiled_cluster_address(address):
+                options.append((cluster_index, address))
         return options
+
+
+    def _is_compiled_cluster_address(self, address):
+        text = str(address or "").strip().upper()
+        if text.startswith("0X"):
+            text = text[2:]
+        text = text.lstrip("0")
+        return bool(text)
 
 
     def _default_cluster_option_index(self):
