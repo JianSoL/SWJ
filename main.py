@@ -309,8 +309,12 @@ class Edit(Ui_Form, QWidget):
         return config["BCU_NUM"] + 1
 
 
-    def _control_tab_index(self):
+    def _realtime_monitor_tab_index(self):
         return config["BCU_NUM"] + 6
+
+
+    def _control_tab_index(self):
+        return config["BCU_NUM"] + 7
 
 
     def _voltage_tab_index(self):
@@ -338,15 +342,15 @@ class Edit(Ui_Form, QWidget):
 
 
     def _abnormal_cell_tab_index(self):
-        return config["BCU_NUM"] + 7
-
-
-    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 8
 
 
-    def _history_log_tab_index(self):
+    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 9
+
+
+    def _history_log_tab_index(self):
+        return config["BCU_NUM"] + 10
 
 
     def _valid_cluster_indices(self):
@@ -493,6 +497,8 @@ class Edit(Ui_Form, QWidget):
         self.S20currentIndexChangedTem()
         if hasattr(self, "S25"):
             self.S25.set_values([])
+        if hasattr(self, "S27"):
+            self.S27.clear_values()
         if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
@@ -517,6 +523,8 @@ class Edit(Ui_Form, QWidget):
             self.selected_cluster_address = self._cluster_address(cluster_index)
             self._sync_cluster_selector_from_index(cluster_index)
             self._sync_page_cluster_combo_boxes(cluster_index)
+            if hasattr(self, "S27"):
+                self.S27.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S17"):
                 self.S17.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S21"):
@@ -689,6 +697,228 @@ class Edit(Ui_Form, QWidget):
         manager = getattr(self, "session_log_manager", None)
         if manager is not None:
             manager.close()
+
+
+    def _monitor_table_value(self, section_index, *signal_names):
+        if not hasattr(self, "TW") or self.CLUSTER_TAB_INDEX >= len(self.TW):
+            return None
+        if section_index < 0 or section_index >= len(self.TW[self.CLUSTER_TAB_INDEX]):
+            return None
+        table = self.TW[self.CLUSTER_TAB_INDEX][section_index]
+        expected = {str(name).strip() for name in signal_names}
+        for row in range(table.rowCount()):
+            signal_item = table.item(row, 0)
+            if signal_item is None:
+                continue
+            if signal_item.text().strip() not in expected:
+                continue
+            value_item = table.item(row, 1)
+            if value_item is None:
+                return None
+            return self._clean_monitor_value(value_item.text())
+        return None
+
+
+    def _clean_monitor_value(self, value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text in ("--", "None", "-1"):
+            return None
+        return text
+
+
+    def _monitor_record_value(self, record, *keys):
+        for key in keys:
+            value = self._clean_monitor_value(record.get(key))
+            if value is not None:
+                return value
+        return None
+
+
+    def _monitor_number(self, value):
+        value = self._clean_monitor_value(value)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+
+    def _nonzero_numeric_values(self, values):
+        numbers = []
+        for value in values:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if number != 0:
+                numbers.append(number)
+        return numbers
+
+
+    def _extreme_snapshot(self, values, cells_per_module, *, scale=1.0):
+        numbers = self._nonzero_numeric_values(values)
+        if not numbers:
+            return {}
+        max_value = max(numbers)
+        min_value = min(numbers)
+        max_index = next(index for index, value in enumerate(values) if float(value) == max_value)
+        min_index = next(index for index, value in enumerate(values) if float(value) == min_value)
+
+        def position(index):
+            if cells_per_module <= 0:
+                return None, index + 1
+            return index // cells_per_module + 1, index % cells_per_module + 1
+
+        max_module, max_cell = position(max_index)
+        min_module, min_cell = position(min_index)
+        return {
+            "max_value": max_value / scale,
+            "min_value": min_value / scale,
+            "max_module": max_module,
+            "max_cell": max_cell,
+            "min_module": min_module,
+            "min_cell": min_cell,
+            "diff": (max_value - min_value) / scale,
+            "avg": sum(numbers) / len(numbers) / scale,
+        }
+
+
+    def _derive_power_kw(self, voltage_value, current_value):
+        voltage = self._monitor_number(voltage_value)
+        current = self._monitor_number(current_value)
+        if voltage is None or current is None:
+            return None
+        return abs(voltage * current) / 1000
+
+
+    def _line_edit_number(self, widget):
+        if widget is None:
+            return None
+        text = str(widget.text()).strip()
+        if not text or text == "--":
+            return None
+        number_text = "".join(char for char in text if char.isdigit() or char in ".-")
+        return self._monitor_number(number_text)
+
+
+    def _state_from_value(self, value):
+        number = self._monitor_number(value)
+        if number is None:
+            return None
+        return bool(int(number))
+
+
+    def _build_realtime_monitor_snapshot(self):
+        cluster_index = self._active_cluster_index()
+        if cluster_index <= 0 or cluster_index >= len(getattr(self, "ResDataRec", [])):
+            return {}
+
+        record = self.ResDataRec[cluster_index]
+        cells_per_module = int(config.get("CELL_NUM", 0))
+        voltage_extremes = self._extreme_snapshot(Vres, cells_per_module, scale=1.0)
+        temp_extremes = self._extreme_snapshot(VresTem, int(config.get("CELL_Tem_NUM", 0)), scale=10.0)
+
+        hall_current = self._monitor_record_value(record, "霍尔电流")
+        shunt_current = self._monitor_record_value(record, "分流器电流")
+        max_charge_current = self._monitor_table_value(0, "最大允许充电电流") or self._monitor_table_value(1, "最大允许充电电流")
+        max_discharge_current = self._monitor_table_value(0, "最大允许放电电流") or self._monitor_table_value(1, "最大允许放电电流")
+        pack_voltage = (
+            self._monitor_record_value(record, "P端电压整簇")
+            or self._monitor_table_value(2, "P总压")
+            or self._monitor_record_value(record, "P端电压上半簇")
+        )
+        battery_voltage = (
+            self._monitor_record_value(record, "B端电压整簇")
+            or self._monitor_table_value(2, "B总压")
+            or self._monitor_record_value(record, "B端电压上半簇")
+        )
+        soc = self._monitor_record_value(record, "SOC上半簇", "SOC下半簇")
+
+        relay_states = [None] * 10
+        relay_states[0] = self._state_from_value(self._monitor_record_value(record, "充电继电器上半簇"))
+        relay_states[5] = self._state_from_value(self._monitor_record_value(record, "放电继电器上半簇"))
+
+        snapshot = {
+            "work_mode": self._monitor_table_value(2, "工装模式"),
+            "run_status": self._monitor_record_value(record, "运行状态上半簇", "运行状态下半簇") or self._monitor_table_value(2, "系统运行状态"),
+            "system_current": hall_current or shunt_current,
+            "hall_current": hall_current,
+            "shunt_current": shunt_current,
+            "battery_voltage": battery_voltage,
+            "system_voltage": battery_voltage,
+            "pack_voltage": pack_voltage,
+            "soc": soc,
+            "display_soc": soc,
+            "soh": self._monitor_record_value(record, "SOH"),
+            "diff_voltage": voltage_extremes.get("diff"),
+            "diff_temp": temp_extremes.get("diff") * 10 if temp_extremes.get("diff") is not None else None,
+            "avg_voltage": voltage_extremes.get("avg"),
+            "avg_temp": temp_extremes.get("avg") * 10 if temp_extremes.get("avg") is not None else None,
+            "module_count": self._monitor_table_value(2, "模组数") or config.get("LECU_NUM"),
+            "afe_count": self._monitor_table_value(2, "每个模组AFE数量"),
+            "online_lecu_num": config.get("LECU_NUM"),
+            "pure_soc": self._monitor_table_value(0, "PURE_SOC", "PURE_SOC_UP"),
+            "revise_soc": self._monitor_table_value(0, "REVISE_SOC", "REVSE_SOC_UP"),
+            "revise_soc_temp": self._monitor_table_value(0, "REVISESOC_TEMP", "REVISE_SOC_Temp_UP"),
+            "fuzzy_soc": self._monitor_table_value(0, "PACK_FUZZY_SOC", "FUZZY_SOC_UP"),
+            "cell_max_soc": self._monitor_table_value(0, "MAX_SOC", "MAX_SOC_UP"),
+            "cell_min_soc": self._monitor_table_value(0, "MIN_SOC", "MIN_SOC_UP"),
+            "cell_max_soc_temp": self._monitor_table_value(0, "CELL_MAX_SOC_TEMP", "MAX_SOC_Temp_UP"),
+            "cell_min_soc_temp": self._monitor_table_value(0, "CELL_MIN_SOC_TEMP", "MIN_SOC_Temp_UP"),
+            "max_cell_voltage": voltage_extremes.get("max_value") or self._monitor_record_value(record, "最大单体电压上半簇", "最大单体电压下半簇"),
+            "max_cell_voltage_module": voltage_extremes.get("max_module"),
+            "max_cell_voltage_index": voltage_extremes.get("max_cell"),
+            "min_cell_voltage": voltage_extremes.get("min_value") or self._monitor_record_value(record, "最小单体电压上半簇", "最小单体电压下半簇"),
+            "min_cell_voltage_module": voltage_extremes.get("min_module"),
+            "min_cell_voltage_index": voltage_extremes.get("min_cell"),
+            "max_cell_temp": temp_extremes.get("max_value") or self._monitor_record_value(record, "最高温度上半簇", "最高温度下半簇"),
+            "max_cell_temp_module": temp_extremes.get("max_module"),
+            "max_cell_temp_index": temp_extremes.get("max_cell"),
+            "min_cell_temp": temp_extremes.get("min_value") or self._monitor_record_value(record, "最低温度上半簇", "最低温度下半簇"),
+            "min_cell_temp_module": temp_extremes.get("min_module"),
+            "min_cell_temp_index": temp_extremes.get("min_cell"),
+            "remaining_discharge_kwh": self._monitor_table_value(0, "剩余可放电"),
+            "remaining_charge_kwh": self._monitor_table_value(0, "剩余可充电"),
+            "single_charge_kwh": self._monitor_table_value(0, "单次充电电量"),
+            "single_discharge_kwh": self._monitor_table_value(0, "单次放电电量"),
+            "total_charge_kwh": self._monitor_table_value(2, "累计充电电量") or self._monitor_table_value(0, "TOTAL_CHRG_AH"),
+            "total_discharge_kwh": self._monitor_table_value(2, "累计放电电量") or self._monitor_table_value(0, "TOTAL_DSCH_AH"),
+            "max_discharge_current": max_discharge_current,
+            "max_charge_current": max_charge_current,
+            "max_discharge_power": self._derive_power_kw(pack_voltage, max_discharge_current),
+            "max_charge_power": self._derive_power_kw(pack_voltage, max_charge_current),
+            "hvil_pwm_freq": self._line_edit_number(getattr(getattr(self, "S17", None), "hvil_freq_current", None)),
+            "hvil_pwm_duty": self._line_edit_number(getattr(getattr(self, "S17", None), "hvil_duty_current", None)),
+            "board_temp1": self._monitor_table_value(self._current_bau_tab_index(), "温度1(5A)"),
+            "board_temp2": self._monitor_table_value(self._current_bau_tab_index(), "温度2(5B)"),
+            "rt_values": [],
+            "di_states": [None] * 12,
+            "relay_states": relay_states,
+        }
+        return snapshot
+
+
+    def _refresh_realtime_monitor_page(self):
+        if not hasattr(self, "S27"):
+            return
+        cluster_index = self._active_cluster_index()
+        address = getattr(self, "selected_cluster_address", "")
+        self.S27.set_cluster_context(cluster_index, address)
+        if cluster_index <= 0:
+            self.S27.clear_values()
+            self.S27.set_status_text("当前没有可用的簇。")
+            return
+        snapshot = self._build_realtime_monitor_snapshot()
+        self.S27.update_snapshot(snapshot)
+        self.S27.set_status_text(f"簇{cluster_index} ({address}) 监控数据由请求索引后台刷新。")
+
+
+    def _refresh_realtime_monitor_page_if_visible(self):
+        if getattr(self, "table_index", None) == self._realtime_monitor_tab_index():
+            self._refresh_realtime_monitor_page()
 
 
     def _set_factory_status(self, mode_value=None, text=None, status=None):
@@ -1352,6 +1582,10 @@ class Edit(Ui_Form, QWidget):
         self.timer2.timeout.connect(self.AlarmLevel)
         self.timer2.start(1000)
 
+        self.timerRealtimeMonitor = QTimer(self)
+        self.timerRealtimeMonitor.timeout.connect(self._refresh_realtime_monitor_page_if_visible)
+        self.timerRealtimeMonitor.start(500)
+
 
         #告警切换槽函数
         self.S21.comboBox.currentIndexChanged.connect(self.on_alarm_cluster_changed)
@@ -1512,6 +1746,8 @@ class Edit(Ui_Form, QWidget):
                 self._set_active_cluster(default_cluster_index, refresh=False, source="tab")
         else:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
+            if index == self._realtime_monitor_tab_index():
+                self._refresh_realtime_monitor_page()
             if index == self._control_tab_index():
                 self._refresh_host_control_snapshot(show_status=True)
 
@@ -2889,7 +3125,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBCUVAR(self):
-        if self.table_index == self.CLUSTER_TAB_INDEX:
+        if self.table_index in (self.CLUSTER_TAB_INDEX, self._realtime_monitor_tab_index()):
             index = self._active_cluster_index()
             for i in range(1):
                 #请求剩余充电时间上半簇

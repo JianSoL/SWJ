@@ -129,6 +129,17 @@ def test_main_window_offscreen_logging():
             window.balance_snapshot_dirty = True
             window.abnormal_snapshot_dirty = True
             window.SaveRunData()
+
+            tab_names = [
+                window.tabWidget.tabText(index)
+                for index in range(window.tabWidget.count())
+            ]
+            _assert("实时监控" in tab_names, "realtime monitor tab is missing")
+            window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
+            window._refresh_realtime_monitor_page()
+            _assert(window.S27.value_fields["soc"].text() == "8.8 %", "realtime SOC value mismatch")
+            _assert(window.S27.value_fields["max_cell_voltage"].text().endswith("mV"), "realtime voltage extrema missing")
+
             window._close_session_log()
 
             log_dir = Path(temp_dir)
