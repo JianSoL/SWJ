@@ -255,6 +255,8 @@ class Ui_Form(object):
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
 
+        self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
+
         for i in range(0,CU_NUM+10):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
@@ -277,6 +279,21 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
         QtCore.QMetaObject.connectSlotsByName(Form)
+
+    def apply_neutral_mode_labels(self, has_neutral=None):
+        has_neutral = bool(config.get("Has_N", 0)) if has_neutral is None else bool(has_neutral)
+        if not hasattr(self, "label"):
+            return
+        if has_neutral:
+            titles = ("上半簇信息", "下半簇信息", "整簇信息")
+        else:
+            titles = ("整簇运行信息（无中线）", "未使用（无中线）", "整簇参数/统计（无中线）")
+        for cluster_index in range(0, max(CU_NUM - 1, 0)):
+            for section_index, title in enumerate(titles):
+                try:
+                    self.label[cluster_index][section_index].setText(title)
+                except (IndexError, AttributeError):
+                    continue
 
     def retranslateUi(self, Form):
         _translate = QtCore.QCoreApplication.translate

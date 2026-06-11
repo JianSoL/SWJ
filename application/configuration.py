@@ -7,6 +7,7 @@ DEFAULT_CAN_BOARD_CONFIG = {
     "can_idx": 0,
     "chn": 1,
     "baud_rate": 500,
+    "Has_N": 0,
 }
 
 
@@ -22,6 +23,15 @@ def _default_config_path(file_name="config.json"):
     return resolve_project_path(file_name)
 
 
+def _normalize_binary_flag(value):
+    if isinstance(value, bool):
+        return 1 if value else 0
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return 1
+    return 0
+
+
 def _normalize_can_board_config(values):
     normalized = dict(DEFAULT_CAN_BOARD_CONFIG)
     if isinstance(values, dict):
@@ -29,6 +39,7 @@ def _normalize_can_board_config(values):
     normalized["can_idx"] = int(normalized["can_idx"])
     normalized["chn"] = int(normalized["chn"])
     normalized["baud_rate"] = int(normalized["baud_rate"])
+    normalized["Has_N"] = _normalize_binary_flag(normalized.get("Has_N", 0))
     return normalized
 
 

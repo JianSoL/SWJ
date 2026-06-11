@@ -364,6 +364,11 @@ class Edit(Ui_Form, QWidget):
         self.baud_rate_spinbox.setFixedWidth(92)
         self.product_command_layout.addWidget(self.baud_rate_spinbox)
 
+        self.has_neutral_checkbox = QCheckBox("带中线", self.product_command_bar)
+        self.has_neutral_checkbox.setToolTip("切换后将清空当前簇缓存，并按有/无中线协议重新解析数据。")
+        self.has_neutral_checkbox.toggled.connect(self.on_has_neutral_toggled)
+        self.product_command_layout.addWidget(self.has_neutral_checkbox)
+
         self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
         self.save_log_checkbox.toggled.connect(self.on_save_log_toggled)
         self.product_command_layout.addWidget(self.save_log_checkbox)
@@ -729,6 +734,7 @@ class Edit(Ui_Form, QWidget):
         self.device_index_spinbox.setValue(int(can_config.get("can_idx", 0)))
         self.channel_index_spinbox.setValue(int(can_config.get("chn", 1)))
         self.baud_rate_spinbox.setValue(int(can_config.get("baud_rate", 500)))
+        self._set_has_neutral(can_config.get("Has_N", config.get("Has_N", 0)), persist=False, refresh=False)
         self._set_log_scope(config.get("SAVE_LOG_SCOPE", "current"))
         self.save_log_checkbox.setChecked(int(config.get("SAVE_LOG", 0)) == 1)
         self._update_log_status()
@@ -740,11 +746,56 @@ class Edit(Ui_Form, QWidget):
             can_config["can_idx"] = int(self.device_index_spinbox.value())
             can_config["chn"] = int(self.channel_index_spinbox.value())
             can_config["baud_rate"] = int(self.baud_rate_spinbox.value())
+            can_config["Has_N"] = 1 if self.has_neutral_checkbox.isChecked() else 0
         return can_config
 
 
     def _save_bus_config(self, can_config):
         save_can_board_config(can_config)
+
+
+    @staticmethod
+    def _normalize_has_neutral_flag(value):
+        if isinstance(value, bool):
+            return 1 if value else 0
+        return 1 if str(value).strip().lower() in ("1", "true", "yes", "on") else 0
+
+
+    def _set_has_neutral(self, has_neutral, persist=False, refresh=True):
+        normalized = self._normalize_has_neutral_flag(has_neutral)
+        previous = self._normalize_has_neutral_flag(config.get("Has_N", 0))
+        config["Has_N"] = normalized
+
+        checkbox = getattr(self, "has_neutral_checkbox", None)
+        if checkbox is not None and checkbox.isChecked() != bool(normalized):
+            blocker = QtCore.QSignalBlocker(checkbox)
+            checkbox.setChecked(bool(normalized))
+            del blocker
+        if hasattr(self, "apply_neutral_mode_labels"):
+            self.apply_neutral_mode_labels(bool(normalized))
+
+        if persist:
+            can_config = self._current_bus_config()
+            can_config["Has_N"] = normalized
+            self._save_bus_config(can_config)
+
+        if refresh and previous != normalized:
+            self._reset_cluster_query_cursors()
+            self._clear_cluster_buffers()
+            self._clear_current_cluster_tables()
+            if hasattr(self, "ResDataRec"):
+                self.ResDataRec = [copy.deepcopy(ResDataRec) for _ in range(config["BCU_NUM"] + 1)]
+            if hasattr(self, "S25"):
+                self.S25.set_values([])
+            if hasattr(self, "S27"):
+                self.S27.clear_values()
+            mode_text = "带中线" if normalized else "无中线"
+            if hasattr(self, "S27"):
+                self.S27.set_status_text(f"已切换为{mode_text}解析模式，等待重新刷新数据。")
+
+
+    def on_has_neutral_toggled(self, checked):
+        self._set_has_neutral(1 if checked else 0, persist=True, refresh=True)
 
 
     def _refresh_dynamic_style(self, widget):

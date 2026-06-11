@@ -47,6 +47,7 @@ def test_configuration_round_trip():
                 "can_idx": "2",
                 "chn": "1",
                 "baud_rate": "500",
+                "Has_N": "1",
             },
             config_path,
         )
@@ -54,6 +55,7 @@ def test_configuration_round_trip():
 
     _assert(saved == loaded, "CAN board config round trip mismatch")
     _assert(loaded["can_idx"] == 2, "CAN index should be normalized to int")
+    _assert(loaded["Has_N"] == 1, "Has_N should be normalized to int flag")
     _assert(load_can_board_config("__missing_config__.json") == DEFAULT_CAN_BOARD_CONFIG, "missing config should use defaults")
 
     runtime_config = {"BCU_NUM": 2, "ADDRESLIST": ["00", "A0", "A1", "A2"]}
@@ -119,6 +121,21 @@ def test_main_window_offscreen_logging():
             all(window.cluster_selector.itemData(index) > 0 for index in range(window.cluster_selector.count())),
             "top cluster selector should not expose 00 cluster index",
         )
+        original_has_n = main_module.config.get("Has_N", 0)
+        try:
+            window._set_has_neutral(1, persist=False, refresh=True)
+            _assert(main_module.config["Has_N"] == 1, "Has_N runtime config should switch to neutral mode")
+            _assert(window.has_neutral_checkbox.isChecked(), "neutral checkbox should mirror Has_N=1")
+            _assert(window.label[window.CLUSTER_TAB_INDEX][0].text() == "上半簇信息", "neutral label should show upper half")
+            window._set_has_neutral(0, persist=False, refresh=True)
+            _assert(main_module.config["Has_N"] == 0, "Has_N runtime config should switch to no-neutral mode")
+            _assert(not window.has_neutral_checkbox.isChecked(), "neutral checkbox should mirror Has_N=0")
+            _assert(
+                window.label[window.CLUSTER_TAB_INDEX][1].text() == "未使用（无中线）",
+                "no-neutral label should mark lower half table unused",
+            )
+        finally:
+            window._set_has_neutral(original_has_n, persist=False, refresh=True)
 
         original_bcu_num = main_module.config["BCU_NUM"]
         original_address_list = list(main_module.config["ADDRESLIST"])
