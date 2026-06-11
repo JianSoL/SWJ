@@ -459,11 +459,11 @@ class Edit(Ui_Form, QWidget):
 
 
     def _realtime_monitor_tab_index(self):
-        return config["BCU_NUM"] + 6
+        return config["BCU_NUM"] + 7
 
 
     def _control_tab_index(self):
-        return config["BCU_NUM"] + 7
+        return config["BCU_NUM"] + 8
 
 
     def _voltage_tab_index(self):
@@ -482,6 +482,10 @@ class Edit(Ui_Form, QWidget):
         return config["BCU_NUM"] + 5
 
 
+    def _active_alarm_tab_index(self):
+        return config["BCU_NUM"] + 6
+
+
     def _di_tab_index(self):
         return -1
 
@@ -491,15 +495,15 @@ class Edit(Ui_Form, QWidget):
 
 
     def _abnormal_cell_tab_index(self):
-        return config["BCU_NUM"] + 8
-
-
-    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 9
 
 
-    def _history_log_tab_index(self):
+    def _balance_control_tab_index(self):
         return config["BCU_NUM"] + 10
+
+
+    def _history_log_tab_index(self):
+        return config["BCU_NUM"] + 11
 
 
     def _valid_cluster_indices(self):
@@ -649,6 +653,9 @@ class Edit(Ui_Form, QWidget):
             self.S25.set_values([])
         if hasattr(self, "S27"):
             self.S27.clear_values()
+        if hasattr(self, "S28"):
+            self.S28.clear_active_alarm_records()
+            self.S28.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
         if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
@@ -679,6 +686,8 @@ class Edit(Ui_Form, QWidget):
                 self.S17.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S21"):
                 self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S28"):
+                self.S28.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
@@ -2046,6 +2055,10 @@ class Edit(Ui_Form, QWidget):
         self.timerRealtimeMonitor.timeout.connect(self._refresh_realtime_monitor_page_if_visible)
         self.timerRealtimeMonitor.start(500)
 
+        self.timerActiveAlarm = QTimer(self)
+        self.timerActiveAlarm.timeout.connect(self._refresh_active_alarm_page_if_visible)
+        self.timerActiveAlarm.start(self.S28.refresh_interval_ms())
+
 
         #告警切换槽函数
         self.S21.comboBox.currentIndexChanged.connect(self.on_alarm_cluster_changed)
@@ -2070,7 +2083,9 @@ class Edit(Ui_Form, QWidget):
                 lambda checked, channel_id=channel_id: self.on_host_control_channel_toggled(channel_id, checked)
             )
         self.S21.button.clicked.connect(self.on_alarm_parameter_read)
-        self.S21.read_active_alarm_button.clicked.connect(self.on_active_alarm_read)
+        self.S28.read_button.clicked.connect(self.on_active_alarm_read)
+        self.S28.auto_refresh_checkbox.toggled.connect(self.on_active_alarm_auto_refresh_toggled)
+        self.S28.interval_spinbox.valueChanged.connect(self.on_active_alarm_interval_changed)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -2222,6 +2237,8 @@ class Edit(Ui_Form, QWidget):
                 self._set_active_cluster(default_cluster_index, refresh=False, source="tab")
         else:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
+            if index == self._active_alarm_tab_index():
+                self._refresh_active_alarm_page_if_visible(force=True)
             if index == self._realtime_monitor_tab_index():
                 self._refresh_realtime_monitor_page()
             if index == self._control_tab_index():
@@ -3442,17 +3459,46 @@ class Edit(Ui_Form, QWidget):
         self.S21.set_status_text("已发送保存参数到FLASH命令，请观察下位机返回状态。")
 
 
-    def _active_alarm_ready(self):
-        self.S21.set_cluster_context(self._active_cluster_index(), self.selected_cluster_address)
+    def _active_alarm_ready(self, show_dialog=True):
+        page = getattr(self, "S28", None)
+        if page is None:
+            return False
+        page.set_cluster_context(self._active_cluster_index(), getattr(self, "selected_cluster_address", ""))
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
-            self.S21.set_status_text("CAN未连接，无法读取实时告警。")
-            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取实时告警。")
+            page.set_status_text("CAN未连接，无法读取实时告警。", failed=True)
+            if show_dialog:
+                QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取实时告警。")
             return False
         if self._active_cluster_index() <= 0:
-            self.S21.set_status_text("未选择目标簇，无法读取实时告警。")
-            QMessageBox.warning(self, "未选择簇", "请先选择目标簇。")
+            page.set_status_text("未选择目标簇，无法读取实时告警。", failed=True)
+            if show_dialog:
+                QMessageBox.warning(self, "未选择簇", "请先选择目标簇。")
             return False
         return True
+
+
+    def on_active_alarm_interval_changed(self, _value):
+        timer = getattr(self, "timerActiveAlarm", None)
+        if timer is not None:
+            timer.setInterval(self.S28.refresh_interval_ms())
+
+
+    def on_active_alarm_auto_refresh_toggled(self, checked):
+        if checked:
+            self.S28.set_status_text("自动刷新已开启。")
+            self._refresh_active_alarm_page_if_visible(force=True)
+        else:
+            self.S28.set_status_text("自动刷新已关闭，可点击“刷新一次”手动读取。")
+
+
+    def _refresh_active_alarm_page_if_visible(self, force=False):
+        if not hasattr(self, "S28"):
+            return
+        if getattr(self, "table_index", None) != self._active_alarm_tab_index():
+            return
+        if not self.S28.auto_refresh_enabled():
+            return
+        self.refresh_active_alarm_page(show_dialog=False)
 
 
     def read_active_alarm_count(self, cluster_index):
@@ -3569,47 +3615,61 @@ class Edit(Ui_Form, QWidget):
         }
 
 
-    def on_active_alarm_read(self):
-        if not self._active_alarm_ready():
+    def refresh_active_alarm_page(self, show_dialog=False):
+        page = getattr(self, "S28", None)
+        if page is None:
             return
+        if getattr(self, "_active_alarm_refreshing", False):
+            return
+        if not self._active_alarm_ready(show_dialog=show_dialog):
+            return
+        self._active_alarm_refreshing = True
         cluster_index = self._active_cluster_index()
         active_timers = self._pause_history_log_timers()
         records = []
         total_count = 0
         error_count = 0
         try:
-            self.S21.set_active_alarm_status(None, None)
-            self.S21.set_status_text("正在读取实时告警总数...")
+            page.set_reading(True)
+            page.set_active_alarm_status(None, None)
+            page.set_status_text("正在读取实时告警总数...")
             QApplication.processEvents()
             total_count = self.read_active_alarm_count(cluster_index)
             read_limit = min(total_count, 0xF0)
-            self.S21.set_active_alarm_status(total_count, 0)
+            page.set_active_alarm_status(total_count, 0)
             if total_count <= 0:
-                self.S21.set_active_alarm_records([], total_count=0)
-                self.S21.set_status_text("当前簇无实时告警。")
+                page.set_active_alarm_records([], total_count=0)
+                page.set_status_text("当前簇无实时告警。")
                 return
             for alarm_index in range(1, read_limit + 1):
-                self.S21.set_status_text(f"正在读取实时告警 {alarm_index}/{total_count}...")
+                page.set_status_text(f"正在读取实时告警 {alarm_index}/{total_count}...")
                 QApplication.processEvents()
                 try:
                     records.append(self.read_active_alarm_entry(cluster_index, alarm_index))
                 except Exception as exc:
                     error_count += 1
-                    self.S21.set_status_text(f"实时告警 {alarm_index} 读取失败: {exc}")
+                    page.set_status_text(f"实时告警 {alarm_index} 读取失败: {exc}", failed=True)
                     QApplication.processEvents()
-            self.S21.set_active_alarm_records(records, total_count=total_count)
+            page.set_active_alarm_records(records, total_count=total_count)
             if total_count > read_limit:
-                self.S21.set_status_text(f"实时告警读取完成，设备上报 {total_count} 条，按协议最多显示前 {read_limit} 条。")
+                page.set_status_text(f"实时告警读取完成，设备上报 {total_count} 条，按协议最多显示前 {read_limit} 条。")
             elif error_count:
-                self.S21.set_status_text(f"实时告警读取完成，成功 {len(records)} 条，失败 {error_count} 条。")
+                page.set_status_text(f"实时告警读取完成，成功 {len(records)} 条，失败 {error_count} 条。", failed=True)
             else:
-                self.S21.set_status_text(f"实时告警读取完成，共 {len(records)} 条。")
+                page.set_status_text(f"实时告警读取完成，共 {len(records)} 条。")
         except Exception as exc:
-            self.S21.set_active_alarm_status(total_count, len(records), failed=True)
-            self.S21.set_status_text(f"读取实时告警失败: {exc}")
-            QMessageBox.critical(self, "读取实时告警失败", str(exc))
+            page.set_active_alarm_status(total_count, len(records), failed=True)
+            page.set_status_text(f"读取实时告警失败: {exc}", failed=True)
+            if show_dialog:
+                QMessageBox.critical(self, "读取实时告警失败", str(exc))
         finally:
+            page.set_reading(False)
             self._resume_history_log_timers(active_timers)
+            self._active_alarm_refreshing = False
+
+
+    def on_active_alarm_read(self):
+        self.refresh_active_alarm_page(show_dialog=True)
 
 
     def RequestAlarmData(self):
@@ -4240,7 +4300,15 @@ class Edit(Ui_Form, QWidget):
 
     def _pause_history_log_timers(self):
         active_timer_names = []
-        for timer_name in ("send_time", "send_time1", "timer1", "timerResData", "timerDI", "timer_Forcecharge"):
+        for timer_name in (
+            "send_time",
+            "send_time1",
+            "timer1",
+            "timerResData",
+            "timerDI",
+            "timer_Forcecharge",
+            "timerActiveAlarm",
+        ):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()

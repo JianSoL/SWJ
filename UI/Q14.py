@@ -22,6 +22,7 @@ from  .T31 import BatteryMonitorBAL as UI31
 from .T32 import BalanceControlPage as UI32
 from .T33 import HistoryLogPage as UI33
 from .T34 import RealtimeMonitorPage as UI34
+from .T35 import ActiveAlarmPage as UI35
 
 
 import yaml
@@ -165,7 +166,7 @@ class Ui_Form(object):
         Form.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+9)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+10)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
@@ -185,12 +186,13 @@ class Ui_Form(object):
         self.S25 = UI32()
         self.S26 = UI33()
         self.S27 = UI34()
+        self.S28 = UI35()
 
         layout = QVBoxLayout(self.tab[CU_NUM+4])
-        layout.addWidget(self.S27)
+        layout.addWidget(self.S28)
 
         layout = QVBoxLayout(self.tab[CU_NUM+5])
-        layout.addWidget(self.S17)
+        layout.addWidget(self.S27)
 
         layout = QVBoxLayout(self.tab[CU_NUM])
         layout.addWidget(self.S18)
@@ -209,12 +211,15 @@ class Ui_Form(object):
         self.S23.setupUi(self._hidden_parameter_page)
 
         layout = QVBoxLayout(self.tab[CU_NUM+6])
-        layout.addWidget(self.S24)
+        layout.addWidget(self.S17)
 
         layout = QVBoxLayout(self.tab[CU_NUM+7])
-        layout.addWidget(self.S25)
+        layout.addWidget(self.S24)
 
         layout = QVBoxLayout(self.tab[CU_NUM+8])
+        layout.addWidget(self.S25)
+
+        layout = QVBoxLayout(self.tab[CU_NUM+9])
         layout.addWidget(self.S26)
 
 
@@ -250,7 +255,7 @@ class Ui_Form(object):
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
 
-        for i in range(0,CU_NUM+9):
+        for i in range(0,CU_NUM+10):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
             self.tabWidget.tabBar().setTabVisible(0, False)
@@ -288,12 +293,13 @@ class Ui_Form(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM]), "单体电压")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+1]), "均衡")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+2]), "单体温度")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "告警")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "实时监控")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "主机控制")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "电芯异常")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+7]), "均衡控制")
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+8]), "历史日志")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+3]), "告警参数")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+4]), "实时告警")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+5]), "实时监控")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+6]), "主机控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+7]), "电芯异常")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+8]), "均衡控制")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+9]), "历史日志")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 

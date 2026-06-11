@@ -162,7 +162,9 @@ def test_main_window_offscreen_logging():
                 window.tabWidget.tabText(index)
                 for index in range(window.tabWidget.count())
             ]
+            _assert("实时告警" in tab_names, "active alarm tab is missing")
             _assert("实时监控" in tab_names, "realtime monitor tab is missing")
+            _assert(window.S28.auto_refresh_checkbox.isChecked(), "active alarm auto refresh should be enabled by default")
             window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
             _assert(36 in window.realtime_monitor_signal_ids, "realtime monitor should poll DI indexes")
             _assert(112 in window.realtime_monitor_signal_ids, "realtime monitor should poll RT indexes")
@@ -223,10 +225,10 @@ def test_main_window_offscreen_logging():
             _assert(active_alarm["alarm_level_text"] == "4 四级", "active alarm level mismatch")
             _assert(active_alarm["bat_text"] == "1 下半簇", "active alarm half-cluster mismatch")
             _assert(active_alarm["start_time"] == "2024-05-06 07:08:09", "active alarm time mismatch")
-            window.S21.set_active_alarm_records([active_alarm], total_count=1)
-            _assert(window.S21.active_alarm_table.rowCount() == 1, "active alarm table row count mismatch")
-            _assert(window.S21.active_alarm_table.item(0, 1).text() == "1", "active alarm table id mismatch")
-            _assert(window.S21.active_alarm_table.item(0, 7).text() == "2024-05-06 07:08:09", "active alarm table time mismatch")
+            window.S28.set_active_alarm_records([active_alarm], total_count=1)
+            _assert(window.S28.active_alarm_table.rowCount() == 1, "active alarm table row count mismatch")
+            _assert(window.S28.active_alarm_table.item(0, 1).text() == "1", "active alarm table id mismatch")
+            _assert(window.S28.active_alarm_table.item(0, 7).text() == "2024-05-06 07:08:09", "active alarm table time mismatch")
 
             window._close_session_log()
 
