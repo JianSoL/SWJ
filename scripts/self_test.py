@@ -162,6 +162,22 @@ def test_main_window_offscreen_logging():
         _assert(window._active_cluster_index() == 0, "00 uncompiled cluster should be selectable")
         _assert(window.cluster_selector.currentData() == 0, "cluster selector should sync to 00 uncompiled option")
 
+        original_frozen = getattr(main_module.sys, "frozen", None)
+        original_executable = main_module.sys.executable
+        with tempfile.TemporaryDirectory(prefix="aidc_exe_log_dir_test_") as temp_dir:
+            main_module.sys.frozen = True
+            main_module.sys.executable = str(Path(temp_dir) / "main.exe")
+            try:
+                expected_log_dir = str(Path(temp_dir) / "hisData")
+                _assert(window._runtime_log_dir() == expected_log_dir, "exe runtime log dir should be beside main.exe")
+                _assert(window._history_log_dir() == expected_log_dir, "exe history log dir should be beside main.exe")
+            finally:
+                main_module.sys.executable = original_executable
+                if original_frozen is None:
+                    delattr(main_module.sys, "frozen")
+                else:
+                    main_module.sys.frozen = original_frozen
+
         with tempfile.TemporaryDirectory(prefix="aidc_ui_log_test_") as temp_dir:
             window._runtime_log_dir = lambda: temp_dir
             window._set_active_cluster(1, refresh=False, source="self_test")

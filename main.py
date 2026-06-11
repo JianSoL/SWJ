@@ -850,8 +850,14 @@ class Edit(Ui_Form, QWidget):
         )
 
 
+    def _application_dir(self):
+        if getattr(sys, "frozen", False):
+            return os.path.dirname(os.path.abspath(sys.executable))
+        return os.path.dirname(os.path.abspath(__file__))
+
+
     def _runtime_log_dir(self):
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "hisData")
+        return os.path.join(self._application_dir(), "hisData")
 
 
     def _log_cluster_indices(self):
@@ -4366,7 +4372,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def _history_log_dir(self):
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "hisData")
+        return os.path.join(self._application_dir(), "hisData")
 
 
     def _history_log_ready(self):
