@@ -118,8 +118,16 @@ def test_main_window_offscreen_logging():
     window = main_module.Edit()
     try:
         _assert(
-            all(window.cluster_selector.itemData(index) > 0 for index in range(window.cluster_selector.count())),
-            "top cluster selector should not expose 00 cluster index",
+            window.cluster_selector.itemData(0) == 0,
+            "top cluster selector should expose 00 uncompiled cluster index",
+        )
+        _assert(
+            "未编制" in window.cluster_selector.itemText(0),
+            "00 cluster selector option should be marked as uncompiled",
+        )
+        _assert(
+            window.cluster_selector.currentData() > 0,
+            "default cluster selector should still choose the first compiled cluster",
         )
         original_has_n = main_module.config.get("Has_N", 0)
         try:
@@ -143,12 +151,16 @@ def test_main_window_offscreen_logging():
             main_module.config["BCU_NUM"] = 5
             main_module.config["ADDRESLIST"] = ["00", "A0", "00", "0x00", "A3", ""]
             _assert(
-                window._build_cluster_options() == [(1, "A0"), (4, "A3")],
-                "uncompiled 00 addresses should be filtered from cluster options",
+                window._build_cluster_options() == [(0, "00"), (1, "A0"), (4, "A3")],
+                "cluster options should include 00 placeholder and filter uncompiled cluster slots",
             )
         finally:
             main_module.config["BCU_NUM"] = original_bcu_num
             main_module.config["ADDRESLIST"] = original_address_list
+
+        window._set_active_cluster(0, refresh=True, source="self_test")
+        _assert(window._active_cluster_index() == 0, "00 uncompiled cluster should be selectable")
+        _assert(window.cluster_selector.currentData() == 0, "cluster selector should sync to 00 uncompiled option")
 
         with tempfile.TemporaryDirectory(prefix="aidc_ui_log_test_") as temp_dir:
             window._runtime_log_dir = lambda: temp_dir

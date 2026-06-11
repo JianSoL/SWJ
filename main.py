@@ -418,7 +418,7 @@ class Edit(Ui_Form, QWidget):
     def _build_cluster_options(self):
         addresses = list(config.get("ADDRESLIST", []))
         max_cluster_index = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
-        options = []
+        options = [(0, "00")]
         for cluster_index in range(1, max_cluster_index + 1):
             address = str(addresses[cluster_index]).upper()
             if self._is_compiled_cluster_address(address):
@@ -451,7 +451,7 @@ class Edit(Ui_Form, QWidget):
     def _cluster_display_name(self, cluster_index, address=None):
         address = self._cluster_address(cluster_index) if address is None else str(address).upper()
         if cluster_index == 0:
-            return f"00 ({address})" if address else "00"
+            return "00（未编制）"
         return f"簇{cluster_index} ({address})" if address else f"簇{cluster_index}"
 
 
@@ -513,6 +513,10 @@ class Edit(Ui_Form, QWidget):
 
     def _valid_cluster_indices(self):
         return {cluster_index for cluster_index, _address in getattr(self, "cluster_options", [])}
+
+
+    def _is_compiled_active_cluster(self):
+        return self._active_cluster_index() > 0
 
 
     def _is_hidden_cluster_tab_index(self, tab_index):
@@ -651,6 +655,21 @@ class Edit(Ui_Form, QWidget):
     def _refresh_cluster_views(self, source=None):
         self._clear_cluster_buffers()
         self._clear_current_cluster_tables()
+        if not self._is_compiled_active_cluster():
+            if hasattr(self, "S27"):
+                self.S27.clear_values()
+                self.S27.set_status_text("当前选择 00（未编制），不会读取簇数据。")
+            if hasattr(self, "S17"):
+                self.S17.set_status_text("当前选择 00（未编制），请选择真实簇后再执行主机控制。")
+            if hasattr(self, "S21"):
+                self.S21.clear_cached_values()
+                self.S21.set_status_text("当前选择 00（未编制），请选择真实簇后再读取告警参数。")
+            if hasattr(self, "S25"):
+                self.S25.set_values([])
+            if hasattr(self, "S28"):
+                self.S28.clear_active_alarm_records()
+                self.S28.set_status_text("当前选择 00（未编制），不会读取实时告警。")
+            return
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
         self.S20currentIndexChangedTem()
@@ -2281,12 +2300,7 @@ class Edit(Ui_Form, QWidget):
             self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
             return
         self.table_index = index
-        if index == self.CLUSTER_TAB_INDEX:
-            if self._active_cluster_index() == 0:
-                default_option_index = self._default_cluster_option_index()
-                default_cluster_index = self.cluster_options[default_option_index][0]
-                self._set_active_cluster(default_cluster_index, refresh=False, source="tab")
-        else:
+        if index != self.CLUSTER_TAB_INDEX:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():
                 self._refresh_active_alarm_page_if_visible(force=True)
@@ -3454,6 +3468,10 @@ class Edit(Ui_Form, QWidget):
             self.S21.set_status_text("CAN未连接，无法读取告警参数。")
             QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取告警参数。")
             return
+        if not self._is_compiled_active_cluster():
+            self.S21.set_status_text("当前选择 00（未编制），请选择真实簇后再读取告警参数。")
+            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能读取告警参数。")
+            return
         if self.send_time1 is not None and not self.send_time1.isActive():
             self.send_time1.start(10)
         self.S21.set_status_text(
@@ -3464,6 +3482,9 @@ class Edit(Ui_Form, QWidget):
     def on_alarm_parameter_write_current(self):
         if not getattr(self, "can_ready", False):
             QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再写入告警参数。")
+            return
+        if not self._is_compiled_active_cluster():
+            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能写入告警参数。")
             return
         alarm_id, raw_fields = self.S21.build_current_raw_fields()
         if alarm_id is None:
@@ -3504,6 +3525,9 @@ class Edit(Ui_Form, QWidget):
     def on_alarm_parameter_save_flash(self):
         if not getattr(self, "can_ready", False):
             QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再保存参数。")
+            return
+        if not self._is_compiled_active_cluster():
+            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能保存参数。")
             return
         data = [4, 0, 0, 0, 8, 0, 0, 0]
         self.CtrlData(self._active_cluster_index(), data)
@@ -3729,6 +3753,8 @@ class Edit(Ui_Form, QWidget):
         if not getattr(self, "can_ready", False):
             return
         Cindex = self._active_cluster_index()
+        if Cindex <= 0:
+            return
         request_limit = getattr(self, "alarm_request_limit", self.S21.alarm_count() * 32)
         if g_index >= request_limit:
             return
@@ -4302,6 +4328,10 @@ class Edit(Ui_Form, QWidget):
     def _send_balance_mask(self, module_index, enabled_values):
         if not getattr(self, "can_ready", False):
             QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再发送均衡控制命令。")
+            return False
+        if not self._is_compiled_active_cluster():
+            self.S25.set_status_text("当前选择 00（未编制），请选择真实簇后再发送均衡控制命令。")
+            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能发送均衡控制命令。")
             return False
         mask = 0
         for cell_index, enabled in enumerate(enabled_values):
