@@ -22,6 +22,14 @@ def _read_csv(path):
         return list(csv.reader(csv_file))
 
 
+def _set_snapshot_value(record, key_prefix, value):
+    for key in record:
+        if key.startswith(key_prefix):
+            record[key] = value
+            return key
+    raise AssertionError(f"{key_prefix} snapshot field not found")
+
+
 def test_configuration_round_trip():
     from application.configuration import (
         DEFAULT_CAN_BOARD_CONFIG,
@@ -110,12 +118,11 @@ def test_main_window_offscreen_logging():
         with tempfile.TemporaryDirectory(prefix="aidc_ui_log_test_") as temp_dir:
             window._runtime_log_dir = lambda: temp_dir
             window._set_active_cluster(1, refresh=False, source="self_test")
+            window.log_scope_selector.setCurrentIndex(window.log_scope_selector.findData("current"))
             window.save_log_checkbox.setChecked(True)
 
-            for key in window.ResDataRec[1]:
-                if key.startswith("SOC"):
-                    window.ResDataRec[1][key] = "88"
-                    break
+            _set_snapshot_value(window.ResDataRec[1], "SOC", "88")
+            _set_snapshot_value(window.ResDataRec[2], "SOC", "99")
 
             cell_count = int(main_module.config["LECU_NUM"]) * int(main_module.config["CELL_NUM"])
             temp_count = int(main_module.config["LECU_NUM"]) * int(main_module.config["CELL_Tem_NUM"])
@@ -128,6 +135,9 @@ def test_main_window_offscreen_logging():
             window.temperature_snapshot_dirty = True
             window.balance_snapshot_dirty = True
             window.abnormal_snapshot_dirty = True
+            window.SaveRunData()
+
+            window.log_scope_selector.setCurrentIndex(window.log_scope_selector.findData("all"))
             window.SaveRunData()
 
             tab_names = [
@@ -144,12 +154,14 @@ def test_main_window_offscreen_logging():
 
             log_dir = Path(temp_dir)
             runtime_files = list(log_dir.rglob("*runtime_cluster_1.csv"))
+            all_scope_runtime_files = list(log_dir.rglob("*runtime_cluster_2.csv"))
             voltage_files = list(log_dir.rglob("*voltage_A0.csv"))
             temperature_files = list(log_dir.rglob("*temperature_A0.csv"))
             balance_files = list(log_dir.rglob("*balance_A0.csv"))
             abnormal_files = list(log_dir.rglob("*abnormal_A0.csv"))
 
             _assert(runtime_files, "runtime CSV was not created")
+            _assert(all_scope_runtime_files, "all-scope runtime CSV was not created")
             _assert(voltage_files, "voltage CSV was not created")
             _assert(temperature_files, "temperature CSV was not created")
             _assert(balance_files, "balance CSV was not created")
@@ -158,6 +170,15 @@ def test_main_window_offscreen_logging():
             runtime_rows = _read_csv(runtime_files[0])
             soc_index = next(index for index, header in enumerate(runtime_rows[0]) if header.startswith("SOC"))
             _assert(runtime_rows[1][soc_index] == "88", "UI runtime SOC snapshot mismatch")
+            all_scope_runtime_rows = _read_csv(all_scope_runtime_files[0])
+            all_scope_soc_index = next(
+                index for index, header in enumerate(all_scope_runtime_rows[0]) if header.startswith("SOC")
+            )
+            _assert(len(all_scope_runtime_rows) == 2, "current-scope logging should not append cluster 2")
+            _assert(
+                all_scope_runtime_rows[1][all_scope_soc_index] == "99",
+                "all-scope runtime SOC snapshot mismatch",
+            )
     finally:
         window.close()
         if QApplication.instance() is app:

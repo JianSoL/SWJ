@@ -237,6 +237,15 @@ class Edit(Ui_Form, QWidget):
         self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
         self.save_log_checkbox.toggled.connect(self.on_save_log_toggled)
         self.product_command_layout.addWidget(self.save_log_checkbox)
+
+        self._add_command_caption("范围")
+        self.log_scope_selector = QComboBox(self.product_command_bar)
+        self.log_scope_selector.setFixedWidth(96)
+        self.log_scope_selector.addItem("当前簇", "current")
+        self.log_scope_selector.addItem("所有簇", "all")
+        self.log_scope_selector.currentIndexChanged.connect(self.on_log_scope_changed)
+        self.product_command_layout.addWidget(self.log_scope_selector)
+
         self.log_status_label = QLabel("日志: 关 / 当前簇", self.product_command_bar)
         self.log_status_label.setObjectName("statusPill")
         self.log_status_label.setProperty("status", "warning")
@@ -570,6 +579,7 @@ class Edit(Ui_Form, QWidget):
         self.device_index_spinbox.setValue(int(can_config.get("can_idx", 0)))
         self.channel_index_spinbox.setValue(int(can_config.get("chn", 1)))
         self.baud_rate_spinbox.setValue(int(can_config.get("baud_rate", 500)))
+        self._set_log_scope(config.get("SAVE_LOG_SCOPE", "current"))
         self.save_log_checkbox.setChecked(int(config.get("SAVE_LOG", 0)) == 1)
         self._update_log_status()
 
@@ -632,6 +642,62 @@ class Edit(Ui_Form, QWidget):
         return build_cluster_addresses(config)
 
 
+    def _normalize_log_scope(self, scope):
+        text = str(scope or "").strip().lower()
+        if text in ("all", "all_clusters", "所有簇", "全部"):
+            return "all"
+        return "current"
+
+
+    def _log_scope(self):
+        selector = getattr(self, "log_scope_selector", None)
+        if selector is not None:
+            scope = selector.currentData()
+            if scope is not None:
+                return self._normalize_log_scope(scope)
+        return self._normalize_log_scope(config.get("SAVE_LOG_SCOPE", "current"))
+
+
+    def _log_scope_text(self):
+        return "所有簇" if self._log_scope() == "all" else "当前簇"
+
+
+    def _set_log_scope(self, scope):
+        normalized_scope = self._normalize_log_scope(scope)
+        config["SAVE_LOG_SCOPE"] = normalized_scope
+        selector = getattr(self, "log_scope_selector", None)
+        if selector is not None and self._normalize_log_scope(selector.currentData()) != normalized_scope:
+            target_index = selector.findData(normalized_scope)
+            if target_index < 0:
+                target_index = 0
+            blocker = QtCore.QSignalBlocker(selector)
+            selector.setCurrentIndex(target_index)
+            del blocker
+        self._update_log_status()
+
+
+    def _log_target_cluster_indices(self):
+        res_data = getattr(self, "ResDataRec", [])
+        valid_indices = []
+        for cluster_index in self._log_cluster_indices():
+            try:
+                cluster_index = int(cluster_index)
+            except (TypeError, ValueError):
+                continue
+            if 0 < cluster_index < len(res_data) and cluster_index not in valid_indices:
+                valid_indices.append(cluster_index)
+
+        if self._log_scope() == "all":
+            return valid_indices
+
+        active_cluster_index = self._active_cluster_index()
+        if active_cluster_index in valid_indices:
+            return [active_cluster_index]
+        if 0 < active_cluster_index < len(res_data):
+            return [active_cluster_index]
+        return []
+
+
     def _ensure_session_log_manager(self):
         manager = getattr(self, "session_log_manager", None)
         if manager is None:
@@ -665,7 +731,8 @@ class Edit(Ui_Form, QWidget):
     def _update_log_status(self):
         enabled = self._logging_enabled()
         manager = getattr(self, "session_log_manager", None)
-        text = f"日志: {'开' if enabled else '关'} / 当前簇"
+        scope_text = self._log_scope_text()
+        text = f"日志: {'开' if enabled else '关'} / {scope_text}"
         label = getattr(self, "log_status_label", None)
         self._set_status_pill(
             label,
@@ -674,9 +741,16 @@ class Edit(Ui_Form, QWidget):
         )
         if label is not None:
             if enabled and manager is not None and manager.enabled:
-                label.setToolTip(f"当前日志会话: {manager.session_name}\n目录: {self._runtime_log_dir()}")
+                label.setToolTip(
+                    f"保存范围: {scope_text}\n当前日志会话: {manager.session_name}\n目录: {self._runtime_log_dir()}"
+                )
             else:
-                label.setToolTip("日志未开启")
+                label.setToolTip(f"日志未开启\n保存范围: {scope_text}")
+
+
+    def on_log_scope_changed(self, _index):
+        selector = getattr(self, "log_scope_selector", None)
+        self._set_log_scope(selector.currentData() if selector is not None else "current")
 
 
     def on_save_log_toggled(self, checked):
@@ -4183,28 +4257,33 @@ class Edit(Ui_Form, QWidget):
     def SaveRunData(self):
         if not self._logging_enabled():
             return
-        cluster_index = self._active_cluster_index()
-        if cluster_index <= 0 or cluster_index >= len(self.ResDataRec):
+        active_cluster_index = self._active_cluster_index()
+        target_cluster_indices = self._log_target_cluster_indices()
+        if not target_cluster_indices:
             return
 
         manager = self._ensure_session_log_manager()
         if not manager.enabled:
             manager.set_enabled(True)
-        address = self._cluster_address(cluster_index)
+        active_address = ""
+        if 0 < active_cluster_index < len(self.ResDataRec):
+            active_address = self._cluster_address(active_cluster_index)
 
         try:
-            manager.write_cluster_snapshot(cluster_index, self.ResDataRec[cluster_index])
-            if self.voltage_snapshot_dirty:
-                manager.write_voltage_snapshot(address, list(Vres))
+            for cluster_index in target_cluster_indices:
+                manager.write_cluster_snapshot(cluster_index, self.ResDataRec[cluster_index])
+
+            if active_address and self.voltage_snapshot_dirty:
+                manager.write_voltage_snapshot(active_address, list(Vres))
                 self.voltage_snapshot_dirty = False
-            if self.temperature_snapshot_dirty:
-                manager.write_temperature_snapshot(address, list(VresTem))
+            if active_address and self.temperature_snapshot_dirty:
+                manager.write_temperature_snapshot(active_address, list(VresTem))
                 self.temperature_snapshot_dirty = False
-            if self.balance_snapshot_dirty:
-                manager.write_balance_snapshot(address, list(VresBAL))
+            if active_address and self.balance_snapshot_dirty:
+                manager.write_balance_snapshot(active_address, list(VresBAL))
                 self.balance_snapshot_dirty = False
-            if self.abnormal_snapshot_dirty:
-                manager.write_abnormal_snapshot(address, list(VresDXYC))
+            if active_address and self.abnormal_snapshot_dirty:
+                manager.write_abnormal_snapshot(active_address, list(VresDXYC))
                 self.abnormal_snapshot_dirty = False
         except Exception as exc:
             timer = getattr(self, "timerResData", None)

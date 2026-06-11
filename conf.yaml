@@ -1,6 +1,7 @@
 Test_4_10:
   Version: 4.20
   SAVE_LOG: 0
+  SAVE_LOG_SCOPE: current
   Has_N: 0
   BCU_NUM: 2
   LECU_NUM: 6
