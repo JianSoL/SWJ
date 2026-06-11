@@ -106,6 +106,7 @@ class MainWindow(QWidget):
         self.alarm_definitions = self._build_alarm_definitions()
         self.summary_items = {}
         self.record_cache = {}
+        self.active_alarm_records = []
         self.current_record_complete = False
         self._ignore_selection = False
         self._build_ui()
@@ -180,6 +181,44 @@ class MainWindow(QWidget):
         self.status_label.setObjectName("sectionHint")
         self.status_label.setWordWrap(True)
         root_layout.addWidget(self.status_label)
+
+        active_group = QGroupBox("实时告警信息", self)
+        active_layout = QVBoxLayout(active_group)
+        active_toolbar = QHBoxLayout()
+        active_toolbar.setSpacing(8)
+        self.active_alarm_summary_label = QLabel("实时告警总数：--", active_group)
+        self.active_alarm_summary_label.setObjectName("sectionHint")
+        active_toolbar.addWidget(self.active_alarm_summary_label)
+        active_toolbar.addStretch(1)
+        self.read_active_alarm_button = QPushButton("读取实时告警", active_group)
+        self.read_active_alarm_button.setObjectName("primaryButton")
+        active_toolbar.addWidget(self.read_active_alarm_button)
+        self.clear_active_alarm_button = QPushButton("清空表格", active_group)
+        active_toolbar.addWidget(self.clear_active_alarm_button)
+        active_layout.addLayout(active_toolbar)
+
+        self.active_alarm_table = QTableWidget(active_group)
+        self.active_alarm_table.setColumnCount(8)
+        self.active_alarm_table.setHorizontalHeaderLabels(
+            ["序号", "告警ID", "告警名称", "告警级别", "位置", "设备类型", "半簇", "发生时间"]
+        )
+        self.active_alarm_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.active_alarm_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.active_alarm_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.active_alarm_table.verticalHeader().setVisible(False)
+        self.active_alarm_table.setAlternatingRowColors(True)
+        self.active_alarm_table.setMinimumHeight(170)
+        self.active_alarm_table.setColumnWidth(0, 58)
+        self.active_alarm_table.setColumnWidth(1, 76)
+        self.active_alarm_table.setColumnWidth(2, 220)
+        self.active_alarm_table.setColumnWidth(3, 80)
+        self.active_alarm_table.setColumnWidth(4, 190)
+        self.active_alarm_table.setColumnWidth(5, 80)
+        self.active_alarm_table.setColumnWidth(6, 76)
+        self.active_alarm_table.horizontalHeader().setStretchLastSection(True)
+        active_layout.addWidget(self.active_alarm_table)
+        root_layout.addWidget(active_group)
+        self.clear_active_alarm_button.clicked.connect(self.clear_active_alarm_records)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.setChildrenCollapsible(False)
@@ -342,6 +381,48 @@ class MainWindow(QWidget):
 
     def set_status_text(self, text):
         self.status_label.setText("" if text is None else str(text))
+
+    def set_active_alarm_status(self, total_count=None, read_count=None, failed=False):
+        if total_count is None:
+            text = "实时告警总数：--"
+        elif read_count is None:
+            text = f"实时告警总数：{int(total_count)}"
+        else:
+            text = f"实时告警总数：{int(total_count)} / 已读取：{int(read_count)}"
+        self.active_alarm_summary_label.setText(text)
+        self.active_alarm_summary_label.setProperty("status", "danger" if failed else "info")
+        self.active_alarm_summary_label.style().unpolish(self.active_alarm_summary_label)
+        self.active_alarm_summary_label.style().polish(self.active_alarm_summary_label)
+
+    def set_active_alarm_records(self, records, total_count=None):
+        self.active_alarm_records = list(records or [])
+        self.active_alarm_table.setRowCount(len(self.active_alarm_records))
+        for row, record in enumerate(self.active_alarm_records):
+            values = [
+                record.get("index", row + 1),
+                record.get("alarm_id", ""),
+                record.get("alarm_name", ""),
+                record.get("alarm_level_text", record.get("alarm_level", "")),
+                record.get("position", ""),
+                record.get("equip_type", ""),
+                record.get("bat_text", record.get("bat_no", "")),
+                record.get("start_time", ""),
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if col in (0, 1, 3, 5, 6):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.active_alarm_table.setItem(row, col, item)
+        self.set_active_alarm_status(
+            len(self.active_alarm_records) if total_count is None else total_count,
+            len(self.active_alarm_records),
+        )
+
+    def clear_active_alarm_records(self):
+        self.active_alarm_records = []
+        self.active_alarm_table.setRowCount(0)
+        self.set_active_alarm_status(0, 0)
 
     def clear_cached_values(self):
         self.record_cache.clear()

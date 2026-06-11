@@ -214,6 +214,20 @@ def test_main_window_offscreen_logging():
             _assert(window.S27.rt_fields[0].text() == "25.1 ℃", "realtime RT1 temperature mismatch")
             _assert(window.S27.value_fields["hvil_pwm_freq"].text() == "50 Hz", "realtime HVIL frequency mismatch")
 
+            active_alarm = window.decode_active_alarm_frames(
+                SimpleNamespace(data=bytes([0xFE, 1, 3, 2, 1, 4, 0, 1])),
+                SimpleNamespace(data=bytes([0xFF, 1, 24, 5, 6, 7, 8, 9])),
+            )
+            _assert(active_alarm["index"] == 1, "active alarm index mismatch")
+            _assert(active_alarm["alarm_id"] == 1, "active alarm display id mismatch")
+            _assert(active_alarm["alarm_level_text"] == "4 四级", "active alarm level mismatch")
+            _assert(active_alarm["bat_text"] == "1 下半簇", "active alarm half-cluster mismatch")
+            _assert(active_alarm["start_time"] == "2024-05-06 07:08:09", "active alarm time mismatch")
+            window.S21.set_active_alarm_records([active_alarm], total_count=1)
+            _assert(window.S21.active_alarm_table.rowCount() == 1, "active alarm table row count mismatch")
+            _assert(window.S21.active_alarm_table.item(0, 1).text() == "1", "active alarm table id mismatch")
+            _assert(window.S21.active_alarm_table.item(0, 7).text() == "2024-05-06 07:08:09", "active alarm table time mismatch")
+
             window._close_session_log()
 
             log_dir = Path(temp_dir)

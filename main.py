@@ -30,6 +30,8 @@ CMD_READ_VAR = 0x80
 RESP_READ_VAR = 0x81
 CMD_WRITE_VAR = 0x82
 RESP_WRITE_VAR = 0x83
+CMD_READ_ACTIVE_ALARM = 0x84
+RESP_READ_ACTIVE_ALARM = 0x85
 CMD_CTRL_HARDWARE = 0x88
 RESP_CTRL_HARDWARE = 0x89
 CMD_SET_TIME = 0x90
@@ -2068,6 +2070,7 @@ class Edit(Ui_Form, QWidget):
                 lambda checked, channel_id=channel_id: self.on_host_control_channel_toggled(channel_id, checked)
             )
         self.S21.button.clicked.connect(self.on_alarm_parameter_read)
+        self.S21.read_active_alarm_button.clicked.connect(self.on_active_alarm_read)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -3437,6 +3440,176 @@ class Edit(Ui_Form, QWidget):
         data = [4, 0, 0, 0, 8, 0, 0, 0]
         self.CtrlData(self._active_cluster_index(), data)
         self.S21.set_status_text("已发送保存参数到FLASH命令，请观察下位机返回状态。")
+
+
+    def _active_alarm_ready(self):
+        self.S21.set_cluster_context(self._active_cluster_index(), self.selected_cluster_address)
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            self.S21.set_status_text("CAN未连接，无法读取实时告警。")
+            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取实时告警。")
+            return False
+        if self._active_cluster_index() <= 0:
+            self.S21.set_status_text("未选择目标簇，无法读取实时告警。")
+            QMessageBox.warning(self, "未选择簇", "请先选择目标簇。")
+            return False
+        return True
+
+
+    def read_active_alarm_count(self, cluster_index):
+        expected_id = self._diag_response_id(cluster_index, RESP_READ_ACTIVE_ALARM)
+        self._flush_diag_rx()
+        self._send_diag_request(cluster_index, CMD_READ_ACTIVE_ALARM, bytes([0]), "读取实时告警总数")
+        frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: len(frame.data) >= 1 and frame.data[0] not in (0xFE, 0xFF),
+            1.5,
+            "读取实时告警总数",
+        )
+        return int(frame.data[0])
+
+
+    def read_active_alarm_entry(self, cluster_index, alarm_index):
+        alarm_index = int(alarm_index)
+        expected_id = self._diag_response_id(cluster_index, RESP_READ_ACTIVE_ALARM)
+        self._flush_diag_rx()
+        self._send_diag_request(cluster_index, CMD_READ_ACTIVE_ALARM, bytes([alarm_index & 0xFF]), "读取实时告警")
+        info_frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: len(frame.data) >= 8 and frame.data[0] == 0xFE and frame.data[1] == alarm_index,
+            1.5,
+            "读取实时告警内容",
+        )
+        time_frame = self._wait_diag_frame(
+            expected_id,
+            lambda frame: len(frame.data) >= 8 and frame.data[0] == 0xFF and frame.data[1] == alarm_index,
+            1.5,
+            "读取实时告警时间",
+        )
+        return self.decode_active_alarm_frames(info_frame, time_frame)
+
+
+    @staticmethod
+    def _active_alarm_level_text(level):
+        level = int(level)
+        text = {
+            0: "无告警",
+            1: "一级",
+            2: "二级",
+            3: "三级",
+            4: "四级",
+            5: "五级",
+            6: "即将切断",
+            7: "故障切断",
+            8: "特殊切断",
+        }.get(level, f"{level}级")
+        return f"{level} {text}"
+
+
+    @staticmethod
+    def _active_alarm_bat_text(bat_no):
+        bat_no = int(bat_no)
+        text = {0: "上半簇", 1: "下半簇"}.get(bat_no, f"半簇{bat_no}")
+        return f"{bat_no} {text}"
+
+
+    @staticmethod
+    def _decode_active_alarm_time(year, month, day, hour, minute, second):
+        year = int(year)
+        month = int(month)
+        day = int(day)
+        hour = int(hour)
+        minute = int(minute)
+        second = int(second)
+        if not (1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            return "--"
+        return f"{2000 + year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+
+
+    def _active_alarm_name(self, raw_alarm_id):
+        raw_alarm_id = int(raw_alarm_id)
+        names = list(config.get("Alarm_name_key", {}).keys())
+        if 0 <= raw_alarm_id < len(names):
+            return str(names[raw_alarm_id])
+        return f"告警{raw_alarm_id + 1:03d}"
+
+
+    def decode_active_alarm_frames(self, info_frame, time_frame):
+        info = bytes(info_frame.data)
+        alarm_time = bytes(time_frame.data)
+        raw_alarm_id = int(info[6])
+        cell_no = int(info[2])
+        bsu_no = int(info[3])
+        equip_type = int(info[4])
+        alarm_level = int(info[5])
+        bat_no = int(info[7])
+        position = f"CSU:{bsu_no:03d} / Cell:{cell_no:03d}"
+        return {
+            "index": int(info[1]),
+            "raw_alarm_id": raw_alarm_id,
+            "alarm_id": raw_alarm_id + 1,
+            "alarm_name": self._active_alarm_name(raw_alarm_id),
+            "alarm_level": alarm_level,
+            "alarm_level_text": self._active_alarm_level_text(alarm_level),
+            "cell_no": cell_no,
+            "bsu_no": bsu_no,
+            "equip_type": equip_type,
+            "position": position,
+            "bat_no": bat_no,
+            "bat_text": self._active_alarm_bat_text(bat_no),
+            "start_time": self._decode_active_alarm_time(
+                alarm_time[2],
+                alarm_time[3],
+                alarm_time[4],
+                alarm_time[5],
+                alarm_time[6],
+                alarm_time[7],
+            ),
+            "raw_info": info[:8],
+            "raw_time": alarm_time[:8],
+        }
+
+
+    def on_active_alarm_read(self):
+        if not self._active_alarm_ready():
+            return
+        cluster_index = self._active_cluster_index()
+        active_timers = self._pause_history_log_timers()
+        records = []
+        total_count = 0
+        error_count = 0
+        try:
+            self.S21.set_active_alarm_status(None, None)
+            self.S21.set_status_text("正在读取实时告警总数...")
+            QApplication.processEvents()
+            total_count = self.read_active_alarm_count(cluster_index)
+            read_limit = min(total_count, 0xF0)
+            self.S21.set_active_alarm_status(total_count, 0)
+            if total_count <= 0:
+                self.S21.set_active_alarm_records([], total_count=0)
+                self.S21.set_status_text("当前簇无实时告警。")
+                return
+            for alarm_index in range(1, read_limit + 1):
+                self.S21.set_status_text(f"正在读取实时告警 {alarm_index}/{total_count}...")
+                QApplication.processEvents()
+                try:
+                    records.append(self.read_active_alarm_entry(cluster_index, alarm_index))
+                except Exception as exc:
+                    error_count += 1
+                    self.S21.set_status_text(f"实时告警 {alarm_index} 读取失败: {exc}")
+                    QApplication.processEvents()
+            self.S21.set_active_alarm_records(records, total_count=total_count)
+            if total_count > read_limit:
+                self.S21.set_status_text(f"实时告警读取完成，设备上报 {total_count} 条，按协议最多显示前 {read_limit} 条。")
+            elif error_count:
+                self.S21.set_status_text(f"实时告警读取完成，成功 {len(records)} 条，失败 {error_count} 条。")
+            else:
+                self.S21.set_status_text(f"实时告警读取完成，共 {len(records)} 条。")
+        except Exception as exc:
+            self.S21.set_active_alarm_status(total_count, len(records), failed=True)
+            self.S21.set_status_text(f"读取实时告警失败: {exc}")
+            QMessageBox.critical(self, "读取实时告警失败", str(exc))
+        finally:
+            self._resume_history_log_timers(active_timers)
 
 
     def RequestAlarmData(self):
