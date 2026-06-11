@@ -44,9 +44,33 @@ CTRL_PARA_CONFIG = 0x04
 WORK_MODE_NORMAL = 0
 WORK_MODE_GZ_TEST = 1
 VAR_SYS_WORK_MODE = 11
+VAR_SYS_RUN_STATUS = 12
+VAR_SYS_VOLT = 13
+VAR_SYS_CURR = 14
 VAR_SYS_SOC = 16
+VAR_SYS_SOH = 17
+VAR_SYS_DIS_SOC = 18
+VAR_SYS_ANALOG_BAT_VOLT = 0x5B
+VAR_SYS_ANALOG_PACK_VOLT = 0x5C
+VAR_SYS_DIFF_VOLT = 321
+VAR_SYS_DIFF_TEMP = 322
+VAR_SYS_AVG_VOLT = 323
+VAR_SYS_AVG_TEMP = 324
+VAR_SYS_ONLINE_LECU_NUM = 325
+VAR_SYS_CELL_VOLT_MAX = 328
+VAR_SYS_MAXV_POSI = 329
+VAR_SYS_CELL_VOLT_MIN = 331
+VAR_SYS_MINV_POSI = 332
+VAR_SYS_CELL_TEMP_MAX = 334
+VAR_SYS_MAXT_POSI = 335
+VAR_SYS_CELL_TEMP_MIN = 337
+VAR_SYS_MINT_POSI = 338
 VAR_SYS_USER_SET_SOC = 445
+VAR_HALL_CURR = 818
+VAR_SHUNT_CURR = 819
 ID_PAR_SYS_START = 0x90400
+PAR_SYS_MODULE_COUNT = ID_PAR_SYS_START + 1
+PAR_SYS_AFE_COUNT = ID_PAR_SYS_START + 2
 PAR_SYS_OUTPUT_HVIL_FREQ = ID_PAR_SYS_START + 197
 PAR_SYS_OUTPUT_HVIL_DUTY_RATIO = ID_PAR_SYS_START + 198
 CTRL_PARA_CONFIG_RESET_FACTORY = 2
@@ -62,6 +86,110 @@ Alarm_list = [[0 for _ in range(32)] for _ in range(64)]
 BAL_JG_LEN = 20*10+64
 
 RUNTIME_LOG_SIGNAL_NAMES = [name for name in ResDataRec.keys() if name != "时间"]
+
+REALTIME_MONITOR_SIGNAL_DEFINITIONS = (
+    {"key": "work_mode", "data_id": VAR_SYS_WORK_MODE, "signed": False},
+    {"key": "module_count", "data_id": PAR_SYS_MODULE_COUNT, "signed": False},
+    {"key": "afe_count", "data_id": PAR_SYS_AFE_COUNT, "signed": False},
+    {"key": "di1", "data_id": 36, "signed": False},
+    {"key": "di2", "data_id": 37, "signed": False},
+    {"key": "di3", "data_id": 38, "signed": False},
+    {"key": "di4", "data_id": 39, "signed": False},
+    {"key": "di5", "data_id": 40, "signed": False},
+    {"key": "di6", "data_id": 41, "signed": False},
+    {"key": "di7", "data_id": 42, "signed": False},
+    {"key": "di8", "data_id": 43, "signed": False},
+    {"key": "di9", "data_id": 44, "signed": False},
+    {"key": "di10", "data_id": 45, "signed": False},
+    {"key": "di11", "data_id": 46, "signed": False},
+    {"key": "di12", "data_id": 47, "signed": False},
+    {"key": "relay1", "data_id": 48, "signed": False},
+    {"key": "relay2", "data_id": 49, "signed": False},
+    {"key": "relay3", "data_id": 50, "signed": False},
+    {"key": "relay4", "data_id": 51, "signed": False},
+    {"key": "relay5", "data_id": 52, "signed": False},
+    {"key": "relay6", "data_id": 53, "signed": False},
+    {"key": "relay7", "data_id": 54, "signed": False},
+    {"key": "relay8", "data_id": 55, "signed": False},
+    {"key": "relay9", "data_id": 56, "signed": False},
+    {"key": "relay10", "data_id": 57, "signed": False},
+    {"key": "rt1", "data_id": 112, "signed": True},
+    {"key": "rt2", "data_id": 113, "signed": True},
+    {"key": "rt3", "data_id": 114, "signed": True},
+    {"key": "rt4", "data_id": 115, "signed": True},
+    {"key": "rt5", "data_id": 116, "signed": True},
+    {"key": "rt6", "data_id": 117, "signed": True},
+    {"key": "rt7", "data_id": 118, "signed": True},
+    {"key": "rt8", "data_id": 119, "signed": True},
+    {"key": "rt9", "data_id": 120, "signed": True},
+    {"key": "rt10", "data_id": 121, "signed": True},
+    {"key": "board_temp1", "data_id": 122, "signed": True},
+    {"key": "board_temp2", "data_id": 123, "signed": True},
+    {"key": "avg_voltage", "data_id": VAR_SYS_AVG_VOLT, "signed": False},
+    {"key": "avg_temp", "data_id": VAR_SYS_AVG_TEMP, "signed": True},
+    {"key": "online_lecu_num", "data_id": VAR_SYS_ONLINE_LECU_NUM, "signed": False},
+    {"key": "user_set_soc", "data_id": VAR_SYS_USER_SET_SOC, "signed": False},
+    {"key": "hvil_pwm_freq", "data_id": PAR_SYS_OUTPUT_HVIL_FREQ, "signed": False},
+    {"key": "hvil_pwm_duty", "data_id": PAR_SYS_OUTPUT_HVIL_DUTY_RATIO, "signed": False},
+)
+
+REALTIME_MONITOR_SIGNAL_IDS = tuple(dict.fromkeys(
+    [definition["data_id"] for definition in REALTIME_MONITOR_SIGNAL_DEFINITIONS]
+    + [
+        VAR_SYS_RUN_STATUS,
+        VAR_SYS_VOLT,
+        VAR_SYS_CURR,
+        VAR_SYS_SOC,
+        VAR_SYS_SOH,
+        VAR_SYS_DIS_SOC,
+        VAR_SYS_ANALOG_BAT_VOLT,
+        VAR_SYS_ANALOG_PACK_VOLT,
+        VAR_SYS_DIFF_VOLT,
+        VAR_SYS_DIFF_TEMP,
+        VAR_SYS_CELL_VOLT_MAX,
+        VAR_SYS_MAXV_POSI,
+        VAR_SYS_CELL_VOLT_MIN,
+        VAR_SYS_MINV_POSI,
+        VAR_SYS_CELL_TEMP_MAX,
+        VAR_SYS_MAXT_POSI,
+        VAR_SYS_CELL_TEMP_MIN,
+        VAR_SYS_MINT_POSI,
+        0x252,
+        0x253,
+        0x1FD,
+        0x1FE,
+        0x90801,
+        0x90802,
+        0x1AD,
+        0x1AF,
+        VAR_HALL_CURR,
+        VAR_SHUNT_CURR,
+        0x1C0,
+        0x1C1,
+        0x1C2,
+        0x1C3,
+        0x1C4,
+        0x1C5,
+        0x1C6,
+        0x1C7,
+        0x346,
+        0x347,
+        0x348,
+        0x349,
+        0x34A,
+        0x34B,
+        0x34C,
+        0x34D,
+        0x34E,
+        0x34F,
+        0x354,
+        0x355,
+        0x356,
+        0x357,
+        0x358,
+        0x359,
+    ]
+))
 
 #ABNORM_ADDR = 0x9098D-2
 ABNORM_ADDR = 0x90901
@@ -482,6 +610,7 @@ class Edit(Ui_Form, QWidget):
             "DXYC_index",
             "BCUSignalQ_index",
             "BCUSignalQ_DXYC_index",
+            "realtime_monitor_query_index",
             "current_COUNT",
         ):
             if hasattr(self, attr_name):
@@ -894,6 +1023,109 @@ class Edit(Ui_Form, QWidget):
             return None
         return bool(int(number))
 
+    def _u16_from_response(self, low_byte, high_byte):
+        return (int(low_byte) & 0xFF) | ((int(high_byte) & 0xFF) << 8)
+
+
+    def _signed_u16(self, raw_word):
+        return Unsignal_Change(int(raw_word) & 0xFFFF)
+
+
+    def _cache_realtime_monitor_index_value(self, cluster_index, data_id, raw_word):
+        try:
+            cluster_index = int(cluster_index)
+            data_id = int(data_id)
+            raw_word = int(raw_word) & 0xFFFF
+        except (TypeError, ValueError):
+            return
+        if cluster_index <= 0:
+            return
+        raw_values = getattr(self, "realtime_monitor_raw_words", None)
+        if raw_values is None:
+            self.realtime_monitor_raw_words = {}
+            raw_values = self.realtime_monitor_raw_words
+        decoded_values = getattr(self, "realtime_monitor_values", None)
+        if decoded_values is None:
+            self.realtime_monitor_values = {}
+            decoded_values = self.realtime_monitor_values
+        raw_values.setdefault(cluster_index, {})[data_id] = raw_word
+        decoded = decoded_values.setdefault(cluster_index, {})
+        for definition in getattr(self, "realtime_monitor_definitions_by_id", {}).get(data_id, []):
+            value = self._signed_u16(raw_word) if definition.get("signed") else raw_word
+            decoded[definition["key"]] = value
+
+
+    def _realtime_raw_value(self, cluster_index, data_id, *, signed=False):
+        raw_word = getattr(self, "realtime_monitor_raw_words", {}).get(cluster_index, {}).get(int(data_id))
+        if raw_word is None:
+            return None
+        if signed:
+            return self._signed_u16(raw_word)
+        return int(raw_word) & 0xFFFF
+
+
+    def _scaled_realtime_raw(self, cluster_index, data_id, *, signed=False, scale=1):
+        value = self._realtime_raw_value(cluster_index, data_id, signed=signed)
+        if value is None:
+            return None
+        if not scale or scale == 1:
+            return value
+        return value / scale
+
+
+    def _realtime_raw_high_byte(self, cluster_index, data_id):
+        value = self._realtime_raw_value(cluster_index, data_id)
+        if value is None:
+            return None
+        return (value >> 8) & 0xFF
+
+
+    def _realtime_raw_low_byte(self, cluster_index, data_id):
+        value = self._realtime_raw_value(cluster_index, data_id)
+        if value is None:
+            return None
+        return value & 0xFF
+
+
+    def _first_monitor_value(self, *values):
+        for value in values:
+            if isinstance(value, (int, float, bool)):
+                return value
+            cleaned = self._clean_monitor_value(value)
+            if cleaned is None:
+                continue
+            return cleaned
+        return None
+
+
+    def _to_input_state(self, value):
+        if value is None:
+            return None
+        try:
+            number = int(float(value)) & 0xFFFF
+        except (TypeError, ValueError):
+            return None
+        if number == 0xFFFF:
+            return True
+        if number == 0:
+            return False
+        return None
+
+
+    def _to_output_state(self, value):
+        if value is None:
+            return None
+        try:
+            return bool(int(float(value)))
+        except (TypeError, ValueError):
+            return None
+
+
+    def _combine_realtime_words(self, high_word, low_word):
+        if high_word is None or low_word is None:
+            return None
+        return ((int(high_word) & 0xFFFF) << 16) | (int(low_word) & 0xFFFF)
+
 
     def _build_realtime_monitor_snapshot(self):
         cluster_index = self._active_cluster_index()
@@ -982,6 +1214,148 @@ class Edit(Ui_Form, QWidget):
             "di_states": [None] * 12,
             "relay_states": relay_states,
         }
+        index_values = getattr(self, "realtime_monitor_values", {}).get(cluster_index, {})
+
+        def decoded(key):
+            return index_values.get(key)
+
+        def raw(data_id, *, signed=False):
+            return self._realtime_raw_value(cluster_index, data_id, signed=signed)
+
+        def scaled(data_id, *, signed=False, scale=1):
+            return self._scaled_realtime_raw(cluster_index, data_id, signed=signed, scale=scale)
+
+        max_voltage_pos = raw(VAR_SYS_MAXV_POSI)
+        min_voltage_pos = raw(VAR_SYS_MINV_POSI)
+        max_temp_pos = raw(VAR_SYS_MAXT_POSI)
+        min_temp_pos = raw(VAR_SYS_MINT_POSI)
+        indexed_pack_voltage = scaled(VAR_SYS_ANALOG_PACK_VOLT, scale=10)
+        indexed_system_voltage = scaled(VAR_SYS_VOLT, scale=10)
+        indexed_battery_voltage = scaled(VAR_SYS_ANALOG_BAT_VOLT, scale=10)
+        indexed_max_discharge_current = scaled(0x1AD, scale=10)
+        indexed_max_charge_current = scaled(0x1AF, scale=10)
+        indexed_di_states = [
+            self._to_input_state(decoded(f"di{state_index}"))
+            for state_index in range(1, 13)
+        ]
+        indexed_relay_states = [
+            self._to_output_state(decoded(f"relay{state_index}"))
+            for state_index in range(1, 11)
+        ]
+        indexed_rt_values = [
+            decoded(f"rt{state_index}")
+            for state_index in range(1, 11)
+        ]
+
+        snapshot.update({
+            "work_mode": self._first_monitor_value(decoded("work_mode"), snapshot.get("work_mode")),
+            "run_status": self._first_monitor_value(raw(VAR_SYS_RUN_STATUS), snapshot.get("run_status")),
+            "system_current": self._first_monitor_value(
+                scaled(VAR_SYS_CURR, signed=True, scale=10),
+                scaled(VAR_HALL_CURR, signed=True, scale=10),
+                scaled(VAR_SHUNT_CURR, signed=True, scale=10),
+                snapshot.get("system_current"),
+            ),
+            "hall_current": self._first_monitor_value(
+                scaled(VAR_HALL_CURR, signed=True, scale=10),
+                snapshot.get("hall_current"),
+            ),
+            "shunt_current": self._first_monitor_value(
+                scaled(VAR_SHUNT_CURR, signed=True, scale=10),
+                snapshot.get("shunt_current"),
+            ),
+            "battery_voltage": self._first_monitor_value(indexed_battery_voltage, snapshot.get("battery_voltage")),
+            "system_voltage": self._first_monitor_value(
+                indexed_system_voltage,
+                indexed_battery_voltage,
+                snapshot.get("system_voltage"),
+            ),
+            "pack_voltage": self._first_monitor_value(indexed_pack_voltage, snapshot.get("pack_voltage")),
+            "soc": self._first_monitor_value(raw(VAR_SYS_SOC), snapshot.get("soc")),
+            "display_soc": self._first_monitor_value(raw(VAR_SYS_DIS_SOC), snapshot.get("display_soc")),
+            "soh": self._first_monitor_value(raw(VAR_SYS_SOH), snapshot.get("soh")),
+            "diff_voltage": self._first_monitor_value(raw(VAR_SYS_DIFF_VOLT), snapshot.get("diff_voltage")),
+            "diff_temp": self._first_monitor_value(raw(VAR_SYS_DIFF_TEMP, signed=True), snapshot.get("diff_temp")),
+            "avg_voltage": self._first_monitor_value(raw(VAR_SYS_AVG_VOLT), decoded("avg_voltage"), snapshot.get("avg_voltage")),
+            "avg_temp": self._first_monitor_value(raw(VAR_SYS_AVG_TEMP, signed=True), decoded("avg_temp"), snapshot.get("avg_temp")),
+            "module_count": self._first_monitor_value(decoded("module_count"), snapshot.get("module_count")),
+            "afe_count": self._first_monitor_value(decoded("afe_count"), snapshot.get("afe_count")),
+            "online_lecu_num": self._first_monitor_value(decoded("online_lecu_num"), snapshot.get("online_lecu_num")),
+            "pure_soc": self._first_monitor_value(raw(0x1C2), raw(0x358), raw(0x359), snapshot.get("pure_soc")),
+            "revise_soc": self._first_monitor_value(raw(0x1C3), raw(0x346), raw(0x347), snapshot.get("revise_soc")),
+            "revise_soc_temp": self._first_monitor_value(raw(0x1C4), raw(0x348), raw(0x349), snapshot.get("revise_soc_temp")),
+            "fuzzy_soc": self._first_monitor_value(raw(0x1C7), raw(0x34E), raw(0x34F), snapshot.get("fuzzy_soc")),
+            "cell_max_soc": self._first_monitor_value(raw(0x1C0), raw(0x354), raw(0x355), snapshot.get("cell_max_soc")),
+            "cell_min_soc": self._first_monitor_value(raw(0x1C1), raw(0x356), raw(0x357), snapshot.get("cell_min_soc")),
+            "cell_max_soc_temp": self._first_monitor_value(raw(0x1C6), raw(0x34C), raw(0x34D), snapshot.get("cell_max_soc_temp")),
+            "cell_min_soc_temp": self._first_monitor_value(raw(0x1C5), raw(0x34A), raw(0x34B), snapshot.get("cell_min_soc_temp")),
+            "max_cell_voltage": self._first_monitor_value(raw(VAR_SYS_CELL_VOLT_MAX), snapshot.get("max_cell_voltage")),
+            "max_cell_voltage_module": self._first_monitor_value(
+                None if max_voltage_pos is None else ((max_voltage_pos >> 8) & 0xFF),
+                snapshot.get("max_cell_voltage_module"),
+            ),
+            "max_cell_voltage_index": self._first_monitor_value(
+                None if max_voltage_pos is None else (max_voltage_pos & 0xFF),
+                snapshot.get("max_cell_voltage_index"),
+            ),
+            "min_cell_voltage": self._first_monitor_value(raw(VAR_SYS_CELL_VOLT_MIN), snapshot.get("min_cell_voltage")),
+            "min_cell_voltage_module": self._first_monitor_value(
+                None if min_voltage_pos is None else ((min_voltage_pos >> 8) & 0xFF),
+                snapshot.get("min_cell_voltage_module"),
+            ),
+            "min_cell_voltage_index": self._first_monitor_value(
+                None if min_voltage_pos is None else (min_voltage_pos & 0xFF),
+                snapshot.get("min_cell_voltage_index"),
+            ),
+            "max_cell_temp": self._first_monitor_value(
+                scaled(VAR_SYS_CELL_TEMP_MAX, signed=True, scale=10),
+                snapshot.get("max_cell_temp"),
+            ),
+            "max_cell_temp_module": self._first_monitor_value(
+                None if max_temp_pos is None else ((max_temp_pos >> 8) & 0xFF),
+                snapshot.get("max_cell_temp_module"),
+            ),
+            "max_cell_temp_index": self._first_monitor_value(
+                None if max_temp_pos is None else (max_temp_pos & 0xFF),
+                snapshot.get("max_cell_temp_index"),
+            ),
+            "min_cell_temp": self._first_monitor_value(
+                scaled(VAR_SYS_CELL_TEMP_MIN, signed=True, scale=10),
+                snapshot.get("min_cell_temp"),
+            ),
+            "min_cell_temp_module": self._first_monitor_value(
+                None if min_temp_pos is None else ((min_temp_pos >> 8) & 0xFF),
+                snapshot.get("min_cell_temp_module"),
+            ),
+            "min_cell_temp_index": self._first_monitor_value(
+                None if min_temp_pos is None else (min_temp_pos & 0xFF),
+                snapshot.get("min_cell_temp_index"),
+            ),
+            "remaining_discharge_kwh": self._first_monitor_value(raw(0x252), snapshot.get("remaining_discharge_kwh")),
+            "remaining_charge_kwh": self._first_monitor_value(raw(0x253), snapshot.get("remaining_charge_kwh")),
+            "single_charge_kwh": self._first_monitor_value(raw(0x1FD), snapshot.get("single_charge_kwh")),
+            "single_discharge_kwh": self._first_monitor_value(raw(0x1FE), snapshot.get("single_discharge_kwh")),
+            "max_discharge_current": self._first_monitor_value(indexed_max_discharge_current, snapshot.get("max_discharge_current")),
+            "max_charge_current": self._first_monitor_value(indexed_max_charge_current, snapshot.get("max_charge_current")),
+            "hvil_pwm_freq": self._first_monitor_value(decoded("hvil_pwm_freq"), raw(PAR_SYS_OUTPUT_HVIL_FREQ), snapshot.get("hvil_pwm_freq")),
+            "hvil_pwm_duty": self._first_monitor_value(decoded("hvil_pwm_duty"), raw(PAR_SYS_OUTPUT_HVIL_DUTY_RATIO), snapshot.get("hvil_pwm_duty")),
+            "board_temp1": self._first_monitor_value(decoded("board_temp1"), snapshot.get("board_temp1")),
+            "board_temp2": self._first_monitor_value(decoded("board_temp2"), snapshot.get("board_temp2")),
+        })
+        snapshot["max_discharge_power"] = self._derive_power_kw(
+            snapshot.get("pack_voltage"),
+            snapshot.get("max_discharge_current"),
+        )
+        snapshot["max_charge_power"] = self._derive_power_kw(
+            snapshot.get("pack_voltage"),
+            snapshot.get("max_charge_current"),
+        )
+        if any(state is not None for state in indexed_di_states):
+            snapshot["di_states"] = indexed_di_states
+        if any(state is not None for state in indexed_relay_states):
+            snapshot["relay_states"] = indexed_relay_states
+        if any(value is not None for value in indexed_rt_values):
+            snapshot["rt_values"] = indexed_rt_values
         return snapshot
 
 
@@ -1797,6 +2171,21 @@ class Edit(Ui_Form, QWidget):
 
         self.BCUSignalQ_DXYC=BCUSignalQ_DXYC
         self.BCUSignalQ_DXYC_index = 0
+        self.realtime_monitor_signal_ids = REALTIME_MONITOR_SIGNAL_IDS
+        self.realtime_monitor_signal_definitions = REALTIME_MONITOR_SIGNAL_DEFINITIONS
+        self.realtime_monitor_definitions_by_id = {}
+        for definition in self.realtime_monitor_signal_definitions:
+            data_id = int(definition["data_id"])
+            self.realtime_monitor_definitions_by_id.setdefault(data_id, []).append(definition)
+        self.realtime_monitor_query_index = 0
+        self.realtime_monitor_raw_words = {
+            cluster_index: {}
+            for cluster_index, _address in getattr(self, "cluster_options", [])
+        }
+        self.realtime_monitor_values = {
+            cluster_index: {}
+            for cluster_index, _address in getattr(self, "cluster_options", [])
+        }
 
         self.last_dx_time = 0
         self.last_dy_time = 0
@@ -1889,6 +2278,10 @@ class Edit(Ui_Form, QWidget):
                     continue
                 addr = config["ADDRESLIST"][index]
                 display_index = self.CLUSTER_TAB_INDEX
+                if (("0x1881F2" + str(addr).casefold()).casefold() == ID.casefold()):
+                    data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
+                    raw_word = self._u16_from_response(byte4, byte5)
+                    self._cache_realtime_monitor_index_value(index, data_id, raw_word)
                 if index-1<config["BCU_NUM"]:
 
                     #带中线
@@ -3209,7 +3602,17 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBCUVAR(self):
-        if self.table_index in (self.CLUSTER_TAB_INDEX, self._realtime_monitor_tab_index()):
+        if self.table_index == self._realtime_monitor_tab_index():
+            index = self._active_cluster_index()
+            signal_ids = getattr(self, "realtime_monitor_signal_ids", ())
+            if index > 0 and signal_ids:
+                data = signal_ids[self.realtime_monitor_query_index]
+                data = [data&0xFF, (data>>8)&0xFF,  (data>>16)&0xFF,  (data>>24)&0xFF, 0, 0, 0, 0]
+                self.QueryData(index,data)
+                self.realtime_monitor_query_index = (self.realtime_monitor_query_index + 1) % len(signal_ids)
+            return
+
+        if self.table_index == self.CLUSTER_TAB_INDEX:
             index = self._active_cluster_index()
             for i in range(1):
                 #请求剩余充电时间上半簇
