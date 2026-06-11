@@ -7,10 +7,15 @@ from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QMessageBox,Q
 import sys
 import time
 import threading
-import json
 from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
 from UI.T33 import HistoryLogRecord
+from application.configuration import (
+    build_cluster_addresses,
+    build_cluster_indices,
+    load_can_board_config,
+    save_can_board_config,
+)
 from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
@@ -134,38 +139,16 @@ for i in range(0,6):
     BAUSignalQ.append(data)
 
 #电芯异常监测
-BCUSignalQ_DXYC= []
-for i in range(0,int(config["LECU_NUM"])):
-    for j in range(0,int(config["CELL_NUM"])):
-        data = ABNORM_ADDR+i*320+j
-        print(data)
-        BCUSignalQ_DXYC.append(data)
+BCUSignalQ_DXYC = [
+    ABNORM_ADDR + module_index * 320 + cell_index
+    for module_index in range(0, int(config["LECU_NUM"]))
+    for cell_index in range(0, int(config["CELL_NUM"]))
+]
 
 AlarmClassDict = {}
 for i in config["ADDRESLIST"]:
     AlarmClassDict[i] = {}
 g_index = 0
-
-
-def load_can_board_config(file_name="config.json"):
-    defaults = {
-        "can_type": "usb_can_2eu",
-        "can_idx": 0,
-        "chn": 1,
-        "baud_rate": 500,
-    }
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)
-    try:
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            loaded = json.load(config_file)
-    except FileNotFoundError:
-        return defaults
-
-    defaults.update({key: loaded[key] for key in defaults.keys() & loaded.keys()})
-    defaults["can_idx"] = int(defaults["can_idx"])
-    defaults["chn"] = int(defaults["chn"])
-    defaults["baud_rate"] = int(defaults["baud_rate"])
-    return defaults
 
 
 class Edit(Ui_Form, QWidget):
@@ -593,22 +576,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def _save_bus_config(self, can_config):
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-        saved = {}
-        try:
-            with open(config_path, "r", encoding="utf-8") as config_file:
-                saved = json.load(config_file)
-        except (FileNotFoundError, json.JSONDecodeError):
-            saved = {}
-        saved.update({
-            "can_type": can_config["can_type"],
-            "can_idx": int(can_config["can_idx"]),
-            "chn": int(can_config["chn"]),
-            "baud_rate": int(can_config["baud_rate"]),
-        })
-        with open(config_path, "w", encoding="utf-8") as config_file:
-            json.dump(saved, config_file, ensure_ascii=False, indent=2)
-            config_file.write("\n")
+        save_can_board_config(can_config)
 
 
     def _refresh_dynamic_style(self, widget):
@@ -649,13 +617,11 @@ class Edit(Ui_Form, QWidget):
 
 
     def _log_cluster_indices(self):
-        addresses = list(config.get("ADDRESLIST", []))
-        cluster_count = min(len(addresses) - 1, int(config.get("BCU_NUM", 0)))
-        return list(range(1, cluster_count + 1))
+        return build_cluster_indices(config)
 
 
     def _log_cluster_addresses(self):
-        return [self._cluster_address(index) for index in self._log_cluster_indices()]
+        return build_cluster_addresses(config)
 
 
     def _ensure_session_log_manager(self):
@@ -1535,7 +1501,6 @@ class Edit(Ui_Form, QWidget):
 
     def on_tab_changed(self, index):
         # 触发的函数：根据选中的标签页输出信息
-        print(f"当前选中的标签页索引: {index}")
         if index == self.ZERO_TAB_INDEX or self._is_hidden_cluster_tab_index(index):
             self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
             return
@@ -2337,7 +2302,6 @@ class Edit(Ui_Form, QWidget):
                 for i in range(0, config["LECU_NUM"]):
                     for j in range(0, config["CELL_NUM"]):
                         if bauvarid==ABNORM_ADDR + i * 320 + j:
-                            print(i, j, i * config["CELL_NUM"] + j)
                             VresDXYC[i*config["CELL_NUM"]+j] = byte4 + byte5 * 256
 
                 now = time.time()
@@ -2572,7 +2536,6 @@ class Edit(Ui_Form, QWidget):
                     # 黄色：表示中等风险或警告。
                     # 橙色：表示较高的风险。
                     # 红色：表示危险或高风险。
-                    print((byte0 & 0x7F - 1))
                     if (byte1 == 0) or (byte1 > 5):
                         AlarmClassDict[config["ADDRESLIST"][index]][(byte0 & 0x7F) - 1] = 0
                         # self.S21.change_row_color((byte0&0x7F)-1,QColor("green"))
@@ -2592,7 +2555,6 @@ class Edit(Ui_Form, QWidget):
                     # 橙色：表示较高的风险。
                     # 红色：表示危险或高风险。
 
-                    print((byte0 & 0x7F - 1))
                     if (byte1 == 0) or (byte1 > 5):
                         AlarmClassDict[config["ADDRESLIST"][index]][(byte0 & 0x7F) - 1] = 0
                         # self.S21.change_row_color((byte0&0x7F)-1,QColor("green"))
@@ -2955,13 +2917,11 @@ class Edit(Ui_Form, QWidget):
 
         if self.table_index == self._abnormal_cell_tab_index():
             index = self._active_cluster_index()
-            print(index)
             for i in range(1):
                 # 请求剩余充电时间上半簇
 
                 data = self.BCUSignalQ_DXYC[self.BCUSignalQ_DXYC_index]
                 data = [data & 0xFF, (data >> 8) & 0xFF, (data >> 16) & 0xFF, (data >> 24) & 0xFF, 0, 0, 0, 0]
-                print(data)
                 self.QueryData(index, data)
                 self.BCUSignalQ_DXYC_index = (self.BCUSignalQ_DXYC_index + 1) % len(self.BCUSignalQ_DXYC)
 

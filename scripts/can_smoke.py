@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -10,24 +9,7 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from ZLGCanControl import Communication
-
-
-def load_config():
-    defaults = {
-        "can_type": "usb_can_2eu",
-        "can_idx": 0,
-        "chn": 1,
-        "baud_rate": 500,
-    }
-    config_path = PROJECT_DIR / "config.json"
-    if config_path.exists():
-        with config_path.open("r", encoding="utf-8") as config_file:
-            loaded = json.load(config_file)
-        defaults.update({key: loaded[key] for key in defaults.keys() & loaded.keys()})
-    defaults["can_idx"] = int(defaults["can_idx"])
-    defaults["chn"] = int(defaults["chn"])
-    defaults["baud_rate"] = int(defaults["baud_rate"])
-    return defaults
+from application.configuration import load_can_board_config
 
 
 def format_frame(frame):
@@ -44,7 +26,7 @@ def main():
     parser.add_argument("--source", type=lambda value: int(value, 0), default=0xF2, help="upper computer source address")
     args = parser.parse_args()
 
-    config = load_config()
+    config = load_can_board_config()
     can = Communication()
     ok, message = can.set_can_board_configuration(
         config["can_type"],
