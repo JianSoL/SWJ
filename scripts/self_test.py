@@ -226,7 +226,26 @@ def test_main_window_offscreen_logging():
             window.abnormal_snapshot_dirty = True
             window.SaveRunData()
 
+            window._cluster_snapshot_store("cluster_voltage_snapshots")[2] = [4300 + index for index in range(cell_count)]
+            window._cluster_snapshot_store("cluster_temperature_snapshots")[2] = [350 + index for index in range(temp_count)]
+            window._cluster_snapshot_store("cluster_balance_snapshots")[2] = [1 for _ in range(cell_count)]
+            window._cluster_snapshot_store("cluster_abnormal_snapshots")[2] = [2 for _ in range(cell_count)]
+            for kind in ("voltage", "temperature", "balance", "abnormal"):
+                window._mark_cluster_snapshot_dirty(kind, 2)
+
             window.log_scope_selector.setCurrentIndex(window.log_scope_selector.findData("all"))
+            sent_log_queries = []
+            original_query_data = window.QueryData
+            try:
+                window.QueryData = lambda cluster_index, data: sent_log_queries.append((cluster_index, list(data)))
+                window.BCUSignalQ = [0x1234]
+                window.log_poll_cluster_cursor = 0
+                window.log_poll_signal_index = 0
+                window._request_all_cluster_log_runtime_data()
+                window._request_all_cluster_log_runtime_data()
+            finally:
+                window.QueryData = original_query_data
+            _assert([cluster_index for cluster_index, _data in sent_log_queries] == [1, 2], "all-scope log polling should cycle clusters")
             window.SaveRunData()
 
             tab_names = [
@@ -310,6 +329,10 @@ def test_main_window_offscreen_logging():
             temperature_files = list(log_dir.rglob("*temperature_A0.csv"))
             balance_files = list(log_dir.rglob("*balance_A0.csv"))
             abnormal_files = list(log_dir.rglob("*abnormal_A0.csv"))
+            all_scope_voltage_files = list(log_dir.rglob("*voltage_A1.csv"))
+            all_scope_temperature_files = list(log_dir.rglob("*temperature_A1.csv"))
+            all_scope_balance_files = list(log_dir.rglob("*balance_A1.csv"))
+            all_scope_abnormal_files = list(log_dir.rglob("*abnormal_A1.csv"))
 
             _assert(runtime_files, "runtime CSV was not created")
             _assert(all_scope_runtime_files, "all-scope runtime CSV was not created")
@@ -317,6 +340,10 @@ def test_main_window_offscreen_logging():
             _assert(temperature_files, "temperature CSV was not created")
             _assert(balance_files, "balance CSV was not created")
             _assert(abnormal_files, "abnormal CSV was not created")
+            _assert(all_scope_voltage_files, "all-scope voltage CSV was not created")
+            _assert(all_scope_temperature_files, "all-scope temperature CSV was not created")
+            _assert(all_scope_balance_files, "all-scope balance CSV was not created")
+            _assert(all_scope_abnormal_files, "all-scope abnormal CSV was not created")
 
             runtime_rows = _read_csv(runtime_files[0])
             soc_index = next(index for index, header in enumerate(runtime_rows[0]) if header.startswith("SOC"))
@@ -330,6 +357,14 @@ def test_main_window_offscreen_logging():
                 all_scope_runtime_rows[1][all_scope_soc_index] == "99",
                 "all-scope runtime SOC snapshot mismatch",
             )
+            all_scope_voltage_rows = _read_csv(all_scope_voltage_files[0])
+            all_scope_temperature_rows = _read_csv(all_scope_temperature_files[0])
+            all_scope_balance_rows = _read_csv(all_scope_balance_files[0])
+            all_scope_abnormal_rows = _read_csv(all_scope_abnormal_files[0])
+            _assert(all_scope_voltage_rows[1][1] == "4300", "all-scope voltage snapshot mismatch")
+            _assert(all_scope_temperature_rows[1][1] == "350", "all-scope temperature snapshot mismatch")
+            _assert(all_scope_balance_rows[1][1] == "1", "all-scope balance snapshot mismatch")
+            _assert(all_scope_abnormal_rows[1][1] == "2", "all-scope abnormal snapshot mismatch")
     finally:
         window.close()
         if QApplication.instance() is app:

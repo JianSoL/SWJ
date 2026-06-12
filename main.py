@@ -526,6 +526,47 @@ class Edit(Ui_Form, QWidget):
         return self._active_cluster_index() > 0
 
 
+    def _compiled_log_cluster_indices(self):
+        return [
+            cluster_index
+            for cluster_index in self._log_target_cluster_indices()
+            if self._is_compiled_cluster_address(self._cluster_address(cluster_index))
+        ]
+
+
+    def _cluster_index_for_can_id(self, frame_id_text, prefix):
+        frame_id = str(frame_id_text or "").strip().casefold()
+        prefix_text = str(prefix or "").strip().casefold()
+        for cluster_index in self._log_cluster_indices():
+            address = self._cluster_address(cluster_index)
+            if not self._is_compiled_cluster_address(address):
+                continue
+            if (prefix_text + str(address).casefold()) == frame_id:
+                return cluster_index
+        return 0
+
+
+    def _shadow_cluster_tab_index(self, cluster_index):
+        shadow_indices = getattr(self, "_shadow_cluster_tab_indices", None)
+        if shadow_indices is None:
+            shadow_indices = {}
+            self._shadow_cluster_tab_indices = shadow_indices
+        cluster_index = int(cluster_index)
+        if cluster_index in shadow_indices:
+            return shadow_indices[cluster_index]
+
+        tables = []
+        for _section_index in range(3):
+            table = QtWidgets.QTableWidget(self)
+            table.setColumnCount(3)
+            table.setRowCount(120)
+            table.hide()
+            tables.append(table)
+        self.TW.append(tables)
+        shadow_indices[cluster_index] = len(self.TW) - 1
+        return shadow_indices[cluster_index]
+
+
     def _is_hidden_cluster_tab_index(self, tab_index):
         return self.CLUSTER_TAB_INDEX < tab_index <= config["BCU_NUM"]
 
@@ -650,6 +691,84 @@ class Edit(Ui_Form, QWidget):
         self.temperature_snapshot_dirty = False
         self.balance_snapshot_dirty = False
         self.abnormal_snapshot_dirty = False
+
+
+    def _cell_value_count(self):
+        return int(config["LECU_NUM"]) * int(config["CELL_NUM"])
+
+
+    def _temperature_value_count(self):
+        return int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"])
+
+
+    def _cluster_snapshot_store(self, attr_name):
+        store = getattr(self, attr_name, None)
+        if store is None:
+            store = {}
+            setattr(self, attr_name, store)
+        return store
+
+
+    def _cluster_snapshot_values(self, attr_name, cluster_index, expected_count):
+        store = self._cluster_snapshot_store(attr_name)
+        cluster_index = int(cluster_index)
+        values = store.get(cluster_index)
+        if values is None or len(values) != expected_count:
+            values = list(values or [])
+            values = values[:expected_count] + [0] * max(0, expected_count - len(values))
+            store[cluster_index] = values
+        return values
+
+
+    def _cluster_dirty_store(self, kind):
+        dirty = getattr(self, "cluster_snapshot_dirty", None)
+        if dirty is None:
+            dirty = {}
+            self.cluster_snapshot_dirty = dirty
+        return dirty.setdefault(kind, set())
+
+
+    def _mark_cluster_snapshot_dirty(self, kind, cluster_index):
+        if cluster_index > 0:
+            self._cluster_dirty_store(kind).add(int(cluster_index))
+
+
+    def _is_cluster_snapshot_dirty(self, kind, cluster_index):
+        return int(cluster_index) in self._cluster_dirty_store(kind)
+
+
+    def _clear_cluster_snapshot_dirty(self, kind, cluster_index):
+        self._cluster_dirty_store(kind).discard(int(cluster_index))
+
+
+    def _sync_active_global_snapshots_to_cluster_cache(self, active_cluster_index):
+        if active_cluster_index <= 0:
+            return
+        if self.voltage_snapshot_dirty:
+            self._cluster_snapshot_store("cluster_voltage_snapshots")[active_cluster_index] = list(Vres)
+            self._mark_cluster_snapshot_dirty("voltage", active_cluster_index)
+        if self.temperature_snapshot_dirty:
+            self._cluster_snapshot_store("cluster_temperature_snapshots")[active_cluster_index] = list(VresTem)
+            self._mark_cluster_snapshot_dirty("temperature", active_cluster_index)
+        if self.balance_snapshot_dirty:
+            self._cluster_snapshot_store("cluster_balance_snapshots")[active_cluster_index] = list(VresBAL)
+            self._mark_cluster_snapshot_dirty("balance", active_cluster_index)
+        if self.abnormal_snapshot_dirty:
+            self._cluster_snapshot_store("cluster_abnormal_snapshots")[active_cluster_index] = list(VresDXYC)
+            self._mark_cluster_snapshot_dirty("abnormal", active_cluster_index)
+
+
+    def _reset_active_global_dirty_flags(self, cluster_index, kind):
+        if int(cluster_index) != self._active_cluster_index():
+            return
+        if kind == "voltage":
+            self.voltage_snapshot_dirty = False
+        elif kind == "temperature":
+            self.temperature_snapshot_dirty = False
+        elif kind == "balance":
+            self.balance_snapshot_dirty = False
+        elif kind == "abnormal":
+            self.abnormal_snapshot_dirty = False
 
 
     def _clear_current_cluster_tables(self):
@@ -2341,6 +2460,8 @@ class Edit(Ui_Form, QWidget):
 
         self.BAL_index = 0
         self.DXYC_index= 0
+        self.log_poll_cluster_cursor = 0
+        self.log_poll_signal_index = 0
 
         #参数查询
         #BCU参数查询1
@@ -2479,15 +2600,17 @@ class Edit(Ui_Form, QWidget):
 
             #################################################################################################################
             #index = self.table_index
-            for index in range(config["BCU_NUM"]+1):
+            for index in range(1, config["BCU_NUM"]+1):
                 # if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                 #     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 #     if ((bauvarid == 0x9040D) and (config["Has_N"])==255):
                 #         config["Has_N"] = byte4 + byte5 * 256
-                if index != self._active_cluster_index():
-                    continue
                 addr = config["ADDRESLIST"][index]
-                display_index = self.CLUSTER_TAB_INDEX
+                display_index = (
+                    self.CLUSTER_TAB_INDEX
+                    if index == self._active_cluster_index()
+                    else self._shadow_cluster_tab_index(index)
+                )
                 if (("0x1881F2" + str(addr).casefold()).casefold() == ID.casefold()):
                     data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
                     raw_word = self._u16_from_response(byte4, byte5)
@@ -3166,6 +3289,87 @@ class Edit(Ui_Form, QWidget):
                         self.S18.setVoltageValues(Vres)
                         self.voltage_snapshot_dirty = True
 
+
+            voltage_cluster_index = self._cluster_index_for_can_id(ID, "0x1235EF")
+            if voltage_cluster_index:
+                packet_type = (byte1 * 256 + byte0) >> 12
+                if packet_type == 0:
+                    values = self._cluster_snapshot_values(
+                        "cluster_voltage_snapshots",
+                        voltage_cluster_index,
+                        self._cell_value_count(),
+                    )
+                    for offset, raw_value in enumerate((byte3 * 256 + byte2, byte5 * 256 + byte4, byte7 * 256 + byte6)):
+                        value_index = (byte1 * 256 + byte0 + offset) & 0x3FF
+                        if value_index < len(values):
+                            values[value_index] = raw_value
+                    self._mark_cluster_snapshot_dirty("voltage", voltage_cluster_index)
+                elif packet_type == 1:
+                    values = self._cluster_snapshot_values(
+                        "cluster_temperature_snapshots",
+                        voltage_cluster_index,
+                        self._temperature_value_count(),
+                    )
+                    for offset, raw_value in enumerate((
+                        Unsignal_Change(byte3 * 256 + byte2),
+                        Unsignal_Change(byte5 * 256 + byte4),
+                        Unsignal_Change(byte7 * 256 + byte6),
+                    )):
+                        value_index = ((byte1 * 256 + byte0) & 0x0FFF) + offset
+                        if value_index < len(values):
+                            values[value_index] = raw_value
+                    self._mark_cluster_snapshot_dirty("temperature", voltage_cluster_index)
+
+            cluster_var_index = self._cluster_index_for_can_id(ID, "0x1881F2")
+            if cluster_var_index:
+                cluster_var_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                if cluster_var_id > 4096 and ((cluster_var_id - 4096) % BAL_JG_LEN in (30, 31)):
+                    module_index = (cluster_var_id - 4096) // BAL_JG_LEN
+                    if 0 <= module_index < int(config["LECU_NUM"]):
+                        low_store = self._cluster_snapshot_values(
+                            "cluster_balance_low_words",
+                            cluster_var_index,
+                            int(config["LECU_NUM"]),
+                        )
+                        high_store = self._cluster_snapshot_values(
+                            "cluster_balance_high_words",
+                            cluster_var_index,
+                            int(config["LECU_NUM"]),
+                        )
+                        if (cluster_var_id - 4096) % BAL_JG_LEN == 30:
+                            low_store[module_index] = byte4 + byte5 * 256
+                        else:
+                            high_store[module_index] = byte4 + byte5 * 256
+
+                        values = self._cluster_snapshot_values(
+                            "cluster_balance_snapshots",
+                            cluster_var_index,
+                            self._cell_value_count(),
+                        )
+                        cell_index = 0
+                        for module_number in range(0, int(config["LECU_NUM"])):
+                            for module_cell_index in range(0, int(config["CELL_NUM"])):
+                                if cell_index >= len(values):
+                                    break
+                                if module_cell_index < 16:
+                                    values[cell_index] = (low_store[module_number] >> module_cell_index) & 0x01
+                                elif module_cell_index < 32:
+                                    values[cell_index] = (high_store[module_number] >> (module_cell_index - 16)) & 0x01
+                                cell_index += 1
+                        self._mark_cluster_snapshot_dirty("balance", cluster_var_index)
+
+                abnormal_values = self._cluster_snapshot_values(
+                    "cluster_abnormal_snapshots",
+                    cluster_var_index,
+                    self._cell_value_count(),
+                )
+                for module_index in range(0, int(config["LECU_NUM"])):
+                    for cell_index in range(0, int(config["CELL_NUM"])):
+                        if cluster_var_id == ABNORM_ADDR + module_index * 320 + cell_index:
+                            absolute_index = module_index * int(config["CELL_NUM"]) + cell_index
+                            if absolute_index < len(abnormal_values):
+                                abnormal_values[absolute_index] = byte4 + byte5 * 256
+                                self._mark_cluster_snapshot_dirty("abnormal", cluster_var_index)
 
             if (("0x1235EF" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 if ((byte1 * 256 + byte0) >> 12 == 1):
@@ -4036,7 +4240,31 @@ class Edit(Ui_Form, QWidget):
 
 
 
+    def _request_all_cluster_log_runtime_data(self):
+        if not self._logging_enabled() or self._log_scope() != "all":
+            return
+        targets = self._compiled_log_cluster_indices()
+        if not targets or not getattr(self, "BCUSignalQ", None):
+            return
+
+        cluster_cursor = getattr(self, "log_poll_cluster_cursor", 0) % len(targets)
+        signal_cursor = getattr(self, "log_poll_signal_index", 0) % len(self.BCUSignalQ)
+        cluster_index = targets[cluster_cursor]
+        data_id = self.BCUSignalQ[signal_cursor]
+        data = [data_id & 0xFF, (data_id >> 8) & 0xFF, (data_id >> 16) & 0xFF, (data_id >> 24) & 0xFF, 0, 0, 0, 0]
+        self.QueryData(cluster_index, data)
+
+        cluster_cursor += 1
+        if cluster_cursor >= len(targets):
+            cluster_cursor = 0
+            signal_cursor = (signal_cursor + 1) % len(self.BCUSignalQ)
+        self.log_poll_cluster_cursor = cluster_cursor
+        self.log_poll_signal_index = signal_cursor
+
+
     def RequestBCUVAR(self):
+        self._request_all_cluster_log_runtime_data()
+
         if self.table_index == self._realtime_monitor_tab_index():
             index = self._active_cluster_index()
             signal_ids = getattr(self, "realtime_monitor_signal_ids", ())
@@ -5134,6 +5362,7 @@ class Edit(Ui_Form, QWidget):
         manager = self._ensure_session_log_manager()
         if not manager.enabled:
             manager.set_enabled(True)
+        self._sync_active_global_snapshots_to_cluster_cache(active_cluster_index)
         active_address = ""
         if 0 < active_cluster_index < len(self.ResDataRec):
             active_address = self._cluster_address(active_cluster_index)
@@ -5141,19 +5370,49 @@ class Edit(Ui_Form, QWidget):
         try:
             for cluster_index in target_cluster_indices:
                 manager.write_cluster_snapshot(cluster_index, self.ResDataRec[cluster_index])
+                cluster_address = self._cluster_address(cluster_index)
+                if not cluster_address:
+                    continue
 
-            if active_address and self.voltage_snapshot_dirty:
-                manager.write_voltage_snapshot(active_address, list(Vres))
-                self.voltage_snapshot_dirty = False
-            if active_address and self.temperature_snapshot_dirty:
-                manager.write_temperature_snapshot(active_address, list(VresTem))
-                self.temperature_snapshot_dirty = False
-            if active_address and self.balance_snapshot_dirty:
-                manager.write_balance_snapshot(active_address, list(VresBAL))
-                self.balance_snapshot_dirty = False
-            if active_address and self.abnormal_snapshot_dirty:
-                manager.write_abnormal_snapshot(active_address, list(VresDXYC))
-                self.abnormal_snapshot_dirty = False
+                if self._is_cluster_snapshot_dirty("voltage", cluster_index):
+                    values = self._cluster_snapshot_values(
+                        "cluster_voltage_snapshots",
+                        cluster_index,
+                        self._cell_value_count(),
+                    )
+                    manager.write_voltage_snapshot(cluster_address, list(values))
+                    self._clear_cluster_snapshot_dirty("voltage", cluster_index)
+                    self._reset_active_global_dirty_flags(cluster_index, "voltage")
+
+                if self._is_cluster_snapshot_dirty("temperature", cluster_index):
+                    values = self._cluster_snapshot_values(
+                        "cluster_temperature_snapshots",
+                        cluster_index,
+                        self._temperature_value_count(),
+                    )
+                    manager.write_temperature_snapshot(cluster_address, list(values))
+                    self._clear_cluster_snapshot_dirty("temperature", cluster_index)
+                    self._reset_active_global_dirty_flags(cluster_index, "temperature")
+
+                if self._is_cluster_snapshot_dirty("balance", cluster_index):
+                    values = self._cluster_snapshot_values(
+                        "cluster_balance_snapshots",
+                        cluster_index,
+                        self._cell_value_count(),
+                    )
+                    manager.write_balance_snapshot(cluster_address, list(values))
+                    self._clear_cluster_snapshot_dirty("balance", cluster_index)
+                    self._reset_active_global_dirty_flags(cluster_index, "balance")
+
+                if self._is_cluster_snapshot_dirty("abnormal", cluster_index):
+                    values = self._cluster_snapshot_values(
+                        "cluster_abnormal_snapshots",
+                        cluster_index,
+                        self._cell_value_count(),
+                    )
+                    manager.write_abnormal_snapshot(cluster_address, list(values))
+                    self._clear_cluster_snapshot_dirty("abnormal", cluster_index)
+                    self._reset_active_global_dirty_flags(cluster_index, "abnormal")
         except Exception as exc:
             timer = getattr(self, "timerResData", None)
             if timer is not None:
