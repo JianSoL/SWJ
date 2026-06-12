@@ -121,7 +121,7 @@ def test_session_logger_files():
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QTableWidgetItem
 
     import main as main_module
 
@@ -211,7 +211,13 @@ def test_main_window_offscreen_logging():
             window.save_log_checkbox.setChecked(True)
 
             _set_snapshot_value(window.ResDataRec[1], "SOC", "88")
-            _set_snapshot_value(window.ResDataRec[2], "SOC", "99")
+            current_key = window._runtime_log_key(1)
+            window._handle_index_var_response(1, main_module.VAR_SYS_CURR, main_module.to_unsigned_16bit(-125), True)
+            _assert(window.ResDataRec[1][current_key] == "-12.5", "index runtime current decode mismatch")
+            window._handle_index_var_response(1, main_module.VAR_SYS_CURR, 100, False)
+            _assert(window.ResDataRec[1][current_key] == "-12.5", "failed index response should not overwrite runtime data")
+            cluster2_table_index = window._shadow_cluster_tab_index(2)
+            window.TW[cluster2_table_index][0].setItem(4, 1, QTableWidgetItem("99"))
 
             cell_count = int(main_module.config["LECU_NUM"]) * int(main_module.config["CELL_NUM"])
             temp_count = int(main_module.config["LECU_NUM"]) * int(main_module.config["CELL_Tem_NUM"])

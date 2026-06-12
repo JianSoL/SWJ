@@ -195,6 +195,34 @@ REALTIME_MONITOR_SIGNAL_IDS = tuple(dict.fromkeys(
     ]
 ))
 
+INDEX_RUNTIME_RECORD_DEFINITIONS = (
+    {"data_id": VAR_SYS_CURR, "record_indices": (1,), "signed": True, "scale": 10},
+    {"data_id": VAR_HALL_CURR, "record_indices": (1,), "signed": True, "scale": 10},
+    {"data_id": VAR_SHUNT_CURR, "record_indices": (14,), "signed": True, "scale": 10},
+    {"data_id": VAR_SYS_ANALOG_BAT_VOLT, "record_indices": (2, 27), "scale": 10},
+    {"data_id": VAR_SYS_ANALOG_PACK_VOLT, "record_indices": (3, 28), "scale": 10},
+    {"data_id": VAR_SYS_VOLT, "record_indices": (3, 28), "scale": 10},
+    {"data_id": VAR_SYS_RUN_STATUS, "record_indices": (4,), "scale": 1},
+    {"data_id": VAR_SYS_SOC, "record_indices": (5,), "scale": 1},
+    {"data_id": VAR_SYS_SOH, "record_indices": (29,), "scale": 1},
+    {"data_id": VAR_SYS_CELL_VOLT_MAX, "record_indices": (6,), "scale": 1},
+    {"data_id": VAR_SYS_CELL_VOLT_MIN, "record_indices": (7,), "scale": 1},
+    {"data_id": VAR_SYS_CELL_TEMP_MAX, "record_indices": (12,), "signed": True, "scale": 1},
+    {"data_id": VAR_SYS_CELL_TEMP_MIN, "record_indices": (13,), "signed": True, "scale": 1},
+    {"data_id": 0x114, "record_indices": (10,), "scale": 1},
+    {"data_id": 0x1CA, "record_indices": (11,), "scale": 1},
+    {"data_id": 0x326, "record_indices": (12,), "signed": True, "scale": 1},
+    {"data_id": 0x327, "record_indices": (25,), "signed": True, "scale": 1},
+    {"data_id": 0x32A, "record_indices": (13,), "signed": True, "scale": 1},
+    {"data_id": 0x32B, "record_indices": (26,), "signed": True, "scale": 1},
+    {"data_id": 0x33E, "record_indices": (11,), "scale": 1},
+    {"data_id": 0x33F, "record_indices": (24,), "scale": 1},
+)
+
+INDEX_RUNTIME_RECORDS_BY_ID = {}
+for _definition in INDEX_RUNTIME_RECORD_DEFINITIONS:
+    INDEX_RUNTIME_RECORDS_BY_ID.setdefault(int(_definition["data_id"]), []).append(_definition)
+
 #ABNORM_ADDR = 0x9098D-2
 ABNORM_ADDR = 0x90901
 for i in range(0,6):
@@ -1125,6 +1153,133 @@ class Edit(Ui_Form, QWidget):
         return []
 
 
+    def _runtime_log_key(self, header_index):
+        runtime_index = int(header_index) - 1
+        if 0 <= runtime_index < len(RUNTIME_LOG_SIGNAL_NAMES):
+            return RUNTIME_LOG_SIGNAL_NAMES[runtime_index]
+        return None
+
+
+    def _runtime_table_value(self, table, row):
+        if table is None or row < 0 or row >= table.rowCount():
+            return None
+        item = table.item(row, 1)
+        if item is None:
+            return None
+        value = str(item.text()).strip()
+        return value if value and value != "-1" else None
+
+
+    def _set_runtime_log_value(self, record, header_indices, value):
+        if value is None:
+            return
+        for header_index in header_indices:
+            key = self._runtime_log_key(header_index)
+            if key and key in record:
+                record[key] = value
+
+
+    def _format_index_runtime_value(self, raw_word, *, signed=False, scale=1):
+        value = self._signed_u16(raw_word) if signed else int(raw_word) & 0xFFFF
+        if scale and scale != 1:
+            value = value / float(scale)
+        if isinstance(value, float):
+            return f"{value:g}"
+        return str(value)
+
+
+    def _cache_runtime_record_index_value(self, cluster_index, data_id, raw_word):
+        try:
+            cluster_index = int(cluster_index)
+            data_id = int(data_id)
+            raw_word = int(raw_word) & 0xFFFF
+        except (TypeError, ValueError):
+            return
+        if cluster_index <= 0 or cluster_index >= len(getattr(self, "ResDataRec", [])):
+            return
+
+        record = self.ResDataRec[cluster_index]
+        for definition in INDEX_RUNTIME_RECORDS_BY_ID.get(data_id, []):
+            value = self._format_index_runtime_value(
+                raw_word,
+                signed=bool(definition.get("signed")),
+                scale=definition.get("scale", 1),
+            )
+            self._set_runtime_log_value(record, definition["record_indices"], value)
+
+
+    def _handle_index_var_response(self, cluster_index, data_id, raw_word, success=True):
+        if not success:
+            return
+        self._cache_realtime_monitor_index_value(cluster_index, data_id, raw_word)
+        self._cache_runtime_record_index_value(cluster_index, data_id, raw_word)
+
+
+    def _runtime_table_index_for_cluster(self, cluster_index):
+        if int(cluster_index) == self._active_cluster_index():
+            return self.CLUSTER_TAB_INDEX
+        return getattr(self, "_shadow_cluster_tab_indices", {}).get(int(cluster_index))
+
+
+    def _sync_runtime_record_from_tables(self, cluster_index):
+        if cluster_index <= 0 or cluster_index >= len(getattr(self, "ResDataRec", [])):
+            return
+        table_index = self._runtime_table_index_for_cluster(cluster_index)
+        if table_index is None or table_index >= len(getattr(self, "TW", [])):
+            return
+
+        record = self.ResDataRec[cluster_index]
+        table_mappings = {
+            0: {
+                0: (1,),
+                1: (2, 27),
+                2: (3, 28),
+                3: (4,),
+                4: (5,),
+                5: (6,),
+                6: (7,),
+                7: (8,),
+                8: (9,),
+                9: (10,),
+                24: (11,),
+                32: (11,),
+                45: (12,),
+                46: (13,),
+            },
+            1: {
+                0: (14,),
+                1: (15,),
+                2: (16,),
+                3: (17,),
+                4: (18,),
+                5: (19,),
+                6: (20,),
+                7: (21,),
+                8: (22,),
+                9: (23,),
+                24: (24,),
+                32: (24,),
+                45: (25,),
+                46: (26,),
+            },
+            2: {
+                1: (27,),
+                2: (28,),
+                3: (29,),
+            },
+        }
+        for section_index, row_map in table_mappings.items():
+            if section_index >= len(self.TW[table_index]):
+                continue
+            table = self.TW[table_index][section_index]
+            for row, header_indices in row_map.items():
+                self._set_runtime_log_value(
+                    record,
+                    header_indices,
+                    self._runtime_table_value(table, row),
+                )
+
+
     def _ensure_session_log_manager(self):
         manager = getattr(self, "session_log_manager", None)
         if manager is None:
@@ -1313,6 +1468,15 @@ class Edit(Ui_Form, QWidget):
 
     def _u16_from_response(self, low_byte, high_byte):
         return (int(low_byte) & 0xFF) | ((int(high_byte) & 0xFF) << 8)
+
+
+    def _u32_from_response(self, byte0, byte1, byte2, byte3):
+        return (
+            (int(byte0) & 0xFF)
+            | ((int(byte1) & 0xFF) << 8)
+            | ((int(byte2) & 0xFF) << 16)
+            | ((int(byte3) & 0xFF) << 24)
+        )
 
 
     def _signed_u16(self, raw_word):
@@ -2611,10 +2775,15 @@ class Edit(Ui_Form, QWidget):
                     if index == self._active_cluster_index()
                     else self._shadow_cluster_tab_index(index)
                 )
-                if (("0x1881F2" + str(addr).casefold()).casefold() == ID.casefold()):
-                    data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
-                    raw_word = self._u16_from_response(byte4, byte5)
-                    self._cache_realtime_monitor_index_value(index, data_id, raw_word)
+                is_index_var_response = (("0x1881F2" + str(addr).casefold()).casefold() == ID.casefold())
+                index_data_id = None
+                index_raw_word = None
+                index_response_ok = False
+                if is_index_var_response:
+                    index_data_id = self._u32_from_response(byte0, byte1, byte2, byte3)
+                    index_raw_word = self._u16_from_response(byte4, byte5)
+                    index_response_ok = bool(byte6)
+                    self._handle_index_var_response(index, index_data_id, index_raw_word, index_response_ok)
                 if index-1<config["BCU_NUM"]:
 
                     #带中线
@@ -2670,8 +2839,8 @@ class Edit(Ui_Form, QWidget):
                         STIID("0x18FE22" + addr, ID, self.TW[display_index][0], 42, "告警代码", str(byte3 * 256*256*256+byte2 * 256*256+byte1 * 256 + byte0), "",self.ResDataRec[index],0)
 
 
-                        if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
-                            bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                        if is_index_var_response and index_response_ok:
+                            bauvarid = index_data_id
 
                             if bauvarid == 0x354:
                                 STI(self.TW[display_index][0], 15, str("MAX_SOC_UP"),str((byte4 + byte5 * 256)), "0.1%")
@@ -2808,8 +2977,8 @@ class Edit(Ui_Form, QWidget):
                         # STIID("0x18FE20" + addr, ID, self.TW[display_index][1], 40, "SOC正向追赶速率", str(byte5 * 256 + byte4), "")
                         # STIID("0x18FE20" + addr, ID, self.TW[display_index][1], 41, "SOC反向追赶速率", str(byte7 * 256 + byte6), "")
                         STIID("0x18FE22" + addr, ID, self.TW[display_index][1], 42, "告警代码", str(byte7 * 256*256*256+byte6 * 256*256+byte5 * 256 + byte4), "",self.ResDataRec[index],1)
-                        if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
-                            bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                        if is_index_var_response and index_response_ok:
+                            bauvarid = index_data_id
 
                             if bauvarid == 0x355:
                                 STI(self.TW[display_index][1], 15, str("MAX_SOC_DOWN"),str((byte4 + byte5 * 256)), "0.1%")
@@ -2890,8 +3059,8 @@ class Edit(Ui_Form, QWidget):
                     else:
                         STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 7, "充电继电器", str(byte2&0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
                         STIID("0x120CEF"+addr, ID, self.TW[display_index][0], 8, "放电继电器", str(byte2>>4 & 0x01), "0断开-1闭合,继电器回读状态",self.ResDataRec[index],0)
-                        if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
-                            bcuvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                        if is_index_var_response and index_response_ok:
+                            bcuvarid = index_data_id
 
                             if bcuvarid == 0xE:
                                 STI(self.TW[display_index][0], 0, str("系统电流"),str((Unsignal_Change(byte4 + byte5 * 256))/10), "A")
@@ -3069,8 +3238,8 @@ class Edit(Ui_Form, QWidget):
 
                     #STIID("0x1206EF" + addr, ID, self.TW[display_index][2], 26, "簇总容量",str((byte7 * 256 + byte6)/10), "AH",self.ResDataRec[index],2)
 
-                    if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
-                        bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                    if is_index_var_response and index_response_ok:
+                        bauvarid = index_data_id
                         if bauvarid == 0x9084A:
                             self.PACK_LIFE_HIGH = byte4 + byte5 * 256
                         if bauvarid == 0x9084B:
@@ -3148,7 +3317,7 @@ class Edit(Ui_Form, QWidget):
 
             try:
                 if ("0x1881F2EF".casefold()  == ID.casefold()):
-                    bauvarid = byte0+byte1*256+byte2*256*256+byte3*256*256
+                    bauvarid = self._u32_from_response(byte0, byte1, byte2, byte3)
                     # 第一块###########################################################################################################
                     if bauvarid==90:
                         STI(self.TW[config["BCU_NUM"]+1][0],0,str("温度1(5A)"),str(Unsignal_Change(byte4+byte5*256)),"0.1℃")
@@ -3322,7 +3491,7 @@ class Edit(Ui_Form, QWidget):
 
             cluster_var_index = self._cluster_index_for_can_id(ID, "0x1881F2")
             if cluster_var_index:
-                cluster_var_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                cluster_var_id = self._u32_from_response(byte0, byte1, byte2, byte3)
                 if cluster_var_id > 4096 and ((cluster_var_id - 4096) % BAL_JG_LEN in (30, 31)):
                     module_index = (cluster_var_id - 4096) // BAL_JG_LEN
                     if 0 <= module_index < int(config["LECU_NUM"]):
@@ -3391,7 +3560,7 @@ class Edit(Ui_Form, QWidget):
 
 
             if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                bauvarid = self._u32_from_response(byte0, byte1, byte2, byte3)
                # for LECU_index in range(config["LECU_NUM"]):
                 if bauvarid>4096:
                     if ((bauvarid-4096)%BAL_JG_LEN == 30) or ((bauvarid-4096)%BAL_JG_LEN == 31):
@@ -3424,7 +3593,7 @@ class Edit(Ui_Form, QWidget):
 
             # 电芯异常
             if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                bauvarid = self._u32_from_response(byte0, byte1, byte2, byte3)
                 # 遍历模组
                 for i in range(0, config["LECU_NUM"]):
                     for j in range(0, config["CELL_NUM"]):
@@ -3444,7 +3613,7 @@ class Edit(Ui_Form, QWidget):
             if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
                 # self.S22.tableWidget.setItem(0, 0, QTableWidgetItem("J1 DI1_H"))
                 # self.S22.tableWidget.setItem(0, 1, QTableWidgetItem(str(byte4 + byte5 * 256)))
-                varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                varid = self._u32_from_response(byte0, byte1, byte2, byte3)
                 varid = varid
                 # self.S21.setItem(varid//32,varid%32+1,str(byte4+byte5*256))
                 if varid == 0x24:
@@ -3502,7 +3671,7 @@ class Edit(Ui_Form, QWidget):
 
             # DIBCU状态
             if (("0x1881F2EF".casefold()).casefold() == ID.casefold()):
-                varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                varid = self._u32_from_response(byte0, byte1, byte2, byte3)
                 varid = varid
                 if varid==0x2D:
                     self.S22.tableWidget_2.setItem(0,0,QTableWidgetItem("J7_DI1_H"))
@@ -3531,7 +3700,7 @@ class Edit(Ui_Form, QWidget):
             #     for j in range(32):
             try:
                 if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                    data_id = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
+                    data_id = self._u32_from_response(byte0, byte1, byte2, byte3)
                     varid = data_id - config["Glaoal_Index_alarm"]
                     alarm_row = varid // 32
                     field_index = varid % 32
@@ -3545,7 +3714,7 @@ class Edit(Ui_Form, QWidget):
 
 
             if (("0x1883F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                varid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256 * 256
+                varid = self._u32_from_response(byte0, byte1, byte2, byte3)
 
                 pending = getattr(self, "pending_alarm_writes", {})
                 if varid in pending:
@@ -3570,7 +3739,7 @@ class Edit(Ui_Form, QWidget):
 
             if self.table_index == self._parameter_tab_index():
                 if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                    bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                    bauvarid = self._u32_from_response(byte0, byte1, byte2, byte3)
                     try:
                         if bauvarid==int(self.S23.lineEdit_13.text()):
                             self.S23.lineEdit_14.setText(str(byte4+byte5*256))
@@ -3596,7 +3765,7 @@ class Edit(Ui_Form, QWidget):
                         self.S23.lineEdit_20.setText(str("NULL"))
 
                 if ("0x1881F2EF".casefold()== ID.casefold()):
-                    bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
+                    bauvarid = self._u32_from_response(byte0, byte1, byte2, byte3)
                     try:
                         if bauvarid==int(self.S23.lineEdit_5.text()):
                             self.S23.lineEdit_6.setText(str(byte4 + byte5 * 256))
@@ -5369,6 +5538,7 @@ class Edit(Ui_Form, QWidget):
 
         try:
             for cluster_index in target_cluster_indices:
+                self._sync_runtime_record_from_tables(cluster_index)
                 manager.write_cluster_snapshot(cluster_index, self.ResDataRec[cluster_index])
                 cluster_address = self._cluster_address(cluster_index)
                 if not cluster_address:
