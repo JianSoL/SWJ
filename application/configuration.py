@@ -9,6 +9,24 @@ DEFAULT_CAN_BOARD_CONFIG = {
     "chn": 1,
     "baud_rate": 500,
     "Has_N": 0,
+    "BCU_NUM": 2,
+    "LECU_NUM": 6,
+    "CELL_NUM": 16,
+    "CELL_Tem_NUM": 16,
+}
+
+RUNTIME_SYSTEM_CONFIG_KEYS = (
+    "BCU_NUM",
+    "LECU_NUM",
+    "CELL_NUM",
+    "CELL_Tem_NUM",
+)
+
+RUNTIME_SYSTEM_CONFIG_LIMITS = {
+    "BCU_NUM": (1, 15),
+    "LECU_NUM": (1, 32),
+    "CELL_NUM": (1, 32),
+    "CELL_Tem_NUM": (1, 32),
 }
 
 
@@ -35,18 +53,33 @@ def _normalize_binary_flag(value):
     return 0
 
 
+def _normalize_int(value, fallback, min_value=None, max_value=None):
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = int(fallback)
+    if min_value is not None:
+        normalized = max(int(min_value), normalized)
+    if max_value is not None:
+        normalized = min(int(max_value), normalized)
+    return normalized
+
+
 def _normalize_can_board_config(values):
     normalized = dict(DEFAULT_CAN_BOARD_CONFIG)
     if isinstance(values, dict):
         normalized.update({key: values[key] for key in normalized.keys() & values.keys()})
-    normalized["can_idx"] = int(normalized["can_idx"])
-    normalized["chn"] = int(normalized["chn"])
-    normalized["baud_rate"] = int(normalized["baud_rate"])
+    normalized["can_idx"] = _normalize_int(normalized["can_idx"], DEFAULT_CAN_BOARD_CONFIG["can_idx"], 0, 31)
+    normalized["chn"] = _normalize_int(normalized["chn"], DEFAULT_CAN_BOARD_CONFIG["chn"], 0, 7)
+    normalized["baud_rate"] = _normalize_int(normalized["baud_rate"], DEFAULT_CAN_BOARD_CONFIG["baud_rate"], 5, 1000)
     normalized["Has_N"] = _normalize_binary_flag(normalized.get("Has_N", 0))
+    for key in RUNTIME_SYSTEM_CONFIG_KEYS:
+        min_value, max_value = RUNTIME_SYSTEM_CONFIG_LIMITS[key]
+        normalized[key] = _normalize_int(normalized.get(key), DEFAULT_CAN_BOARD_CONFIG[key], min_value, max_value)
     return normalized
 
 
-def load_can_board_config(file_name="config.json"):
+def _load_config_json(file_name="config.json"):
     config_path = Path(file_name)
     if not config_path.is_absolute():
         config_path = _default_config_path(file_name)
@@ -54,20 +87,21 @@ def load_can_board_config(file_name="config.json"):
         with open(config_path, "r", encoding="utf-8") as config_file:
             loaded = json.load(config_file)
     except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        return config_path, {}
+    if not isinstance(loaded, dict):
+        return config_path, {}
+    return config_path, loaded
+
+
+def load_can_board_config(file_name="config.json"):
+    _config_path, loaded = _load_config_json(file_name)
+    if not loaded:
         return dict(DEFAULT_CAN_BOARD_CONFIG)
     return _normalize_can_board_config(loaded)
 
 
 def save_can_board_config(can_config, file_name="config.json"):
-    config_path = Path(file_name)
-    if not config_path.is_absolute():
-        config_path = _default_config_path(file_name)
-    saved = {}
-    try:
-        with open(config_path, "r", encoding="utf-8") as config_file:
-            saved = json.load(config_file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        saved = {}
+    config_path, saved = _load_config_json(file_name)
 
     normalized = _normalize_can_board_config(can_config)
     saved.update(normalized)
@@ -76,6 +110,18 @@ def save_can_board_config(can_config, file_name="config.json"):
         json.dump(saved, config_file, ensure_ascii=False, indent=2)
         config_file.write("\n")
     return normalized
+
+
+def load_runtime_config_overrides(file_name="config.json"):
+    _config_path, loaded = _load_config_json(file_name)
+    if not loaded:
+        return {}
+    normalized = _normalize_can_board_config(loaded)
+    return {
+        key: normalized[key]
+        for key in ("Has_N",) + RUNTIME_SYSTEM_CONFIG_KEYS
+        if key in loaded
+    }
 
 
 def build_cluster_indices(runtime_config):

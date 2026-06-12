@@ -3,6 +3,8 @@ import sys
 
 import yaml
 
+from application.configuration import load_runtime_config_overrides
+
 
 def _resource_path(*parts):
     candidates = []
@@ -20,3 +22,5 @@ def _resource_path(*parts):
 
 with open(_resource_path("conf.yaml"), 'r', encoding='utf-8') as file:
     config = yaml.safe_load(file)["Test_4_10"]
+
+config.update(load_runtime_config_overrides())

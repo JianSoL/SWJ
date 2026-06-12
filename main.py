@@ -11,6 +11,8 @@ from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
 from UI.T33 import HistoryLogRecord
 from application.configuration import (
+    RUNTIME_SYSTEM_CONFIG_KEYS,
+    RUNTIME_SYSTEM_CONFIG_LIMITS,
     build_cluster_addresses,
     build_cluster_indices,
     load_can_board_config,
@@ -368,6 +370,11 @@ class Edit(Ui_Form, QWidget):
         self.has_neutral_checkbox.setToolTip("切换后将清空当前簇缓存，并按有/无中线协议重新解析数据。")
         self.has_neutral_checkbox.toggled.connect(self.on_has_neutral_toggled)
         self.product_command_layout.addWidget(self.has_neutral_checkbox)
+
+        self.system_config_button = QPushButton("系统配置", self.product_command_bar)
+        self.system_config_button.setToolTip("配置可切换簇数、模组数、每模组单体数和每模组温度数。保存后重启生效。")
+        self.system_config_button.clicked.connect(self.on_system_config_requested)
+        self.product_command_layout.addWidget(self.system_config_button)
 
         self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
         self.save_log_checkbox.toggled.connect(self.on_save_log_toggled)
@@ -774,7 +781,78 @@ class Edit(Ui_Form, QWidget):
 
 
     def _save_bus_config(self, can_config):
-        save_can_board_config(can_config)
+        return save_can_board_config(can_config)
+
+
+    def _runtime_system_config_values(self):
+        saved_config = load_can_board_config()
+        values = {}
+        for key in RUNTIME_SYSTEM_CONFIG_KEYS:
+            values[key] = int(saved_config.get(key, config.get(key, 0)))
+        return values
+
+
+    def on_system_config_requested(self):
+        current_values = self._runtime_system_config_values()
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("系统配置")
+        dialog.setModal(True)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(12)
+
+        hint = QLabel("结构配置保存到 config.json，重启软件后完整生效。", dialog)
+        hint.setObjectName("sectionHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QtWidgets.QFormLayout()
+        form.setSpacing(10)
+        layout.addLayout(form)
+
+        address_capacity = max(1, len(config.get("ADDRESLIST", [])) - 1)
+        specs = (
+            ("BCU_NUM", "可切换簇数", " 簇", min(RUNTIME_SYSTEM_CONFIG_LIMITS["BCU_NUM"][1], address_capacity)),
+            ("LECU_NUM", "模组数", " 个", RUNTIME_SYSTEM_CONFIG_LIMITS["LECU_NUM"][1]),
+            ("CELL_NUM", "每模组单体数", " 个", RUNTIME_SYSTEM_CONFIG_LIMITS["CELL_NUM"][1]),
+            ("CELL_Tem_NUM", "每模组温度数", " 个", RUNTIME_SYSTEM_CONFIG_LIMITS["CELL_Tem_NUM"][1]),
+        )
+        spinboxes = {}
+        for key, label_text, suffix, max_value in specs:
+            min_value = RUNTIME_SYSTEM_CONFIG_LIMITS[key][0]
+            spinbox = QSpinBox(dialog)
+            spinbox.setRange(min_value, max_value)
+            spinbox.setValue(max(min_value, min(int(current_values.get(key, min_value)), max_value)))
+            spinbox.setSuffix(suffix)
+            spinbox.setMinimumWidth(140)
+            form.addRow(label_text, spinbox)
+            spinboxes[key] = spinbox
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        new_values = {key: int(spinbox.value()) for key, spinbox in spinboxes.items()}
+        can_config = self._current_bus_config()
+        can_config.update(new_values)
+        saved = self._save_bus_config(can_config)
+
+        if any(int(saved.get(key, current_values[key])) != current_values[key] for key in RUNTIME_SYSTEM_CONFIG_KEYS):
+            QMessageBox.information(
+                self,
+                "系统配置已保存",
+                "可切换簇数、模组数、每模组单体数和每模组温度数已保存；请重启软件让界面、缓存和日志列全部按新配置生成。",
+            )
+        else:
+            QMessageBox.information(self, "系统配置", "配置未变化。")
 
 
     @staticmethod
@@ -4384,7 +4462,16 @@ class Edit(Ui_Form, QWidget):
         for cell_index, enabled in enumerate(enabled_values):
             if enabled:
                 mask |= 1 << cell_index
-        data = [7, 0, int(module_index), 0, mask & 0xFF, (mask >> 8) & 0xFF, 0, 0]
+        data = [
+            7,
+            0,
+            int(module_index),
+            0,
+            mask & 0xFF,
+            (mask >> 8) & 0xFF,
+            (mask >> 16) & 0xFF,
+            (mask >> 24) & 0xFF,
+        ]
         self.CtrlData(self._active_cluster_index(), data)
         return True
 

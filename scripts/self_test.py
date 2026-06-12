@@ -36,6 +36,7 @@ def test_configuration_round_trip():
         build_cluster_addresses,
         build_cluster_indices,
         load_can_board_config,
+        load_runtime_config_overrides,
         save_can_board_config,
     )
 
@@ -48,14 +49,25 @@ def test_configuration_round_trip():
                 "chn": "1",
                 "baud_rate": "500",
                 "Has_N": "1",
+                "BCU_NUM": "4",
+                "LECU_NUM": "8",
+                "CELL_NUM": "20",
+                "CELL_Tem_NUM": "12",
             },
             config_path,
         )
         loaded = load_can_board_config(config_path)
+        overrides = load_runtime_config_overrides(config_path)
 
     _assert(saved == loaded, "CAN board config round trip mismatch")
     _assert(loaded["can_idx"] == 2, "CAN index should be normalized to int")
     _assert(loaded["Has_N"] == 1, "Has_N should be normalized to int flag")
+    _assert(loaded["BCU_NUM"] == 4, "cluster count should be normalized to int")
+    _assert(loaded["LECU_NUM"] == 8, "module count should be normalized to int")
+    _assert(loaded["CELL_NUM"] == 20, "cell count should be normalized to int")
+    _assert(loaded["CELL_Tem_NUM"] == 12, "temperature count should be normalized to int")
+    _assert(overrides["BCU_NUM"] == 4, "runtime override should include cluster count")
+    _assert(overrides["CELL_Tem_NUM"] == 12, "runtime override should include temperature count")
     _assert(load_can_board_config("__missing_config__.json") == DEFAULT_CAN_BOARD_CONFIG, "missing config should use defaults")
 
     runtime_config = {"BCU_NUM": 2, "ADDRESLIST": ["00", "A0", "A1", "A2"]}
