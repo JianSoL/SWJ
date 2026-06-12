@@ -685,6 +685,8 @@ class Edit(Ui_Form, QWidget):
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
             if getattr(self, "can_ready", False):
                 self.on_alarm_parameter_read()
+        if getattr(self, "table_index", None) == self._control_tab_index() and getattr(self, "can_ready", False):
+            self._refresh_host_control_snapshot(show_status=True)
 
 
     def _set_active_cluster(self, cluster_index, refresh=True, source=None):
@@ -716,6 +718,8 @@ class Edit(Ui_Form, QWidget):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
                 self.S26.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if previous_index != cluster_index:
+                self._apply_host_control_snapshot_for_cluster(cluster_index)
 
             if (
                 source in ("top", "init")
@@ -1466,6 +1470,40 @@ class Edit(Ui_Form, QWidget):
             self._refresh_realtime_monitor_page()
 
 
+    def _host_control_snapshot_cache(self):
+        cache = getattr(self, "host_control_snapshots", None)
+        if cache is None:
+            cache = {}
+            self.host_control_snapshots = cache
+        return cache
+
+
+    def _cache_host_control_snapshot(self, cluster_index, values, merge=True):
+        if cluster_index <= 0:
+            return {}
+        cache = self._host_control_snapshot_cache()
+        snapshot = dict(cache.get(cluster_index, {})) if merge else {}
+        snapshot.update(values or {})
+        cache[cluster_index] = snapshot
+        return snapshot
+
+
+    def _apply_host_control_snapshot_for_cluster(self, cluster_index):
+        if not hasattr(self, "S17"):
+            return
+        if cluster_index <= 0:
+            self.S17.update_snapshot({})
+            self._set_factory_status(None)
+            return
+        snapshot = self._host_control_snapshot_cache().get(cluster_index)
+        if snapshot:
+            self.S17.update_snapshot(snapshot)
+            self._set_factory_status(snapshot.get("work_mode"))
+        else:
+            self.S17.update_snapshot({})
+            self._set_factory_status(None)
+
+
     def _set_factory_status(self, mode_value=None, text=None, status=None):
         if text is None:
             if mode_value is None:
@@ -1721,13 +1759,15 @@ class Edit(Ui_Form, QWidget):
             authorize=True,
         )
         self._set_factory_status(mode)
-        self.S17.update_snapshot({"work_mode": mode})
+        snapshot = self._cache_host_control_snapshot(cluster_index, {"work_mode": mode}, merge=True)
+        self.S17.update_snapshot(snapshot)
         return mode
 
 
     def _require_factory_mode_sync(self, cluster_index):
         mode = self._read_data_u16_sync(cluster_index, VAR_SYS_WORK_MODE, timeout_s=0.8, retries=1)
         self._set_factory_status(mode)
+        self._cache_host_control_snapshot(cluster_index, {"work_mode": mode}, merge=True)
         if int(mode) != WORK_MODE_GZ_TEST:
             raise RuntimeError("当前工装模式未开启，请先点击顶部“工装开”。")
         return mode
@@ -1787,6 +1827,7 @@ class Edit(Ui_Form, QWidget):
                     relay_states.append(False)
             snapshot["relay_states"] = relay_states
 
+            self._cache_host_control_snapshot(cluster_index, snapshot, merge=False)
             self.S17.update_snapshot(snapshot)
             self._set_factory_status(snapshot.get("work_mode"))
             if show_status:

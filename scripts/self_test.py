@@ -162,6 +162,20 @@ def test_main_window_offscreen_logging():
         _assert(window._active_cluster_index() == 0, "00 uncompiled cluster should be selectable")
         _assert(window.cluster_selector.currentData() == 0, "cluster selector should sync to 00 uncompiled option")
 
+        window._cache_host_control_snapshot(1, {"work_mode": main_module.WORK_MODE_GZ_TEST}, merge=False)
+        window._cache_host_control_snapshot(2, {"work_mode": main_module.WORK_MODE_NORMAL}, merge=False)
+        window._set_active_cluster(1, refresh=False, source="self_test")
+        _assert("开" in window.S17.work_mode_label.text(), "cluster 1 should show cached factory mode on")
+        _assert("开" in window.factory_status_label.text(), "top factory status should show cluster 1 factory mode")
+        window._set_active_cluster(2, refresh=False, source="self_test")
+        _assert("关" in window.S17.work_mode_label.text(), "cluster 2 should show its own cached factory mode off")
+        _assert("关" in window.factory_status_label.text(), "top factory status should show cluster 2 factory mode")
+        window.host_control_snapshots.pop(2, None)
+        window._set_active_cluster(1, refresh=False, source="self_test")
+        window._set_active_cluster(2, refresh=False, source="self_test")
+        _assert("--" in window.S17.work_mode_label.text(), "cluster without cache should not reuse another cluster factory mode")
+        _assert("未知" in window.factory_status_label.text(), "top factory status should be unknown without cluster cache")
+
         original_frozen = getattr(main_module.sys, "frozen", None)
         original_executable = main_module.sys.executable
         with tempfile.TemporaryDirectory(prefix="aidc_exe_log_dir_test_") as temp_dir:
