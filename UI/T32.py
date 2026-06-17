@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,8 @@ class BalanceControlPage(QWidget):
         super().__init__()
         self.module_count = int(config["LECU_NUM"])
         self.cells_per_module = int(config["CELL_NUM"])
+        self.module_columns = 2 if self.module_count > 1 else 1
+        self.cells_per_row = min(4, max(1, self.cells_per_module))
         self.checks = []
         self.state_labels = []
         self._build_ui()
@@ -58,19 +61,23 @@ class BalanceControlPage(QWidget):
         root.addWidget(scroll, 1)
 
         content = QWidget(scroll)
-        grid = QGridLayout(content)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        rows = QVBoxLayout(content)
+        rows.setContentsMargins(4, 4, 4, 4)
+        rows.setSpacing(12)
         scroll.setWidget(content)
 
-        columns = 2 if self.module_count > 1 else 1
+        row_layout = None
         for module_index in range(self.module_count):
+            if module_index % self.module_columns == 0:
+                row_layout = QHBoxLayout()
+                row_layout.setSpacing(12)
+                rows.addLayout(row_layout)
             group = QGroupBox(f"模组 {module_index + 1}", content)
+            group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             group_layout = QVBoxLayout(group)
             group_layout.setContentsMargins(12, 18, 12, 12)
             group_layout.setSpacing(8)
-            grid.addWidget(group, module_index // columns, module_index % columns)
+            row_layout.addWidget(group, 1)
 
             cell_grid = QGridLayout()
             cell_grid.setHorizontalSpacing(8)
@@ -91,7 +98,8 @@ class BalanceControlPage(QWidget):
                 cell_layout.addWidget(state)
                 module_checks.append(checkbox)
                 module_states.append(state)
-                cell_grid.addWidget(cell, cell_index // 4, cell_index % 4)
+                cell_grid.addWidget(cell, cell_index // self.cells_per_row, cell_index % self.cells_per_row)
+                cell_grid.setColumnStretch(cell_index % self.cells_per_row, 1)
             group_layout.addLayout(cell_grid)
 
             buttons = QHBoxLayout()
@@ -108,6 +116,13 @@ class BalanceControlPage(QWidget):
             group_layout.addLayout(buttons)
             self.checks.append(module_checks)
             self.state_labels.append(module_states)
+
+            if module_index % self.module_columns == self.module_columns - 1:
+                row_layout = None
+
+        if self.module_count % self.module_columns and row_layout is not None:
+            row_layout.addStretch(1)
+        rows.addStretch(1)
 
     def _emit_apply(self, module_index):
         values = [checkbox.isChecked() for checkbox in self.checks[module_index]]

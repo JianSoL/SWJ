@@ -4,9 +4,11 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -22,6 +24,8 @@ class ModuleCellGrid(QWidget):
         self.mode = mode
         self.module_count = int(config["LECU_NUM"])
         self.cells_per_module = int(cells_per_module or config["CELL_NUM"])
+        self.module_columns = 2 if self.module_count > 1 else 1
+        self.cells_per_row = min(4, max(1, self.cells_per_module))
         self.lineEdits = []
         self.comboBox = QComboBox(self)
         self.comboBox.addItems([str(i) for i in range(0, 16)])
@@ -43,22 +47,30 @@ class ModuleCellGrid(QWidget):
         root.addWidget(scroll_area, 1)
 
         content = QWidget(scroll_area)
-        grid = QGridLayout(content)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        rows = QVBoxLayout(content)
+        rows.setContentsMargins(4, 4, 4, 4)
+        rows.setSpacing(12)
         scroll_area.setWidget(content)
 
-        columns = 2 if self.module_count > 1 else 1
+        row_layout = None
         for module_index in range(self.module_count):
+            if module_index % self.module_columns == 0:
+                row_layout = QHBoxLayout()
+                row_layout.setSpacing(12)
+                rows.addLayout(row_layout)
             group = QGroupBox(f"模组 {module_index + 1}", content)
+            group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             group_layout = QGridLayout(group)
             group_layout.setContentsMargins(12, 18, 12, 12)
             group_layout.setHorizontalSpacing(8)
             group_layout.setVerticalSpacing(8)
-            grid.addWidget(group, module_index // columns, module_index % columns)
+            row_layout.addWidget(group, 1)
 
             for cell_index in range(self.cells_per_module):
+                cell = QWidget(group)
+                cell_layout = QHBoxLayout(cell)
+                cell_layout.setContentsMargins(0, 0, 0, 0)
+                cell_layout.setSpacing(6)
                 label = QLabel(f"{cell_index + 1:02d}", group)
                 label.setObjectName("metricLabel")
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -68,11 +80,21 @@ class ModuleCellGrid(QWidget):
                 edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 edit.setMinimumWidth(72)
                 edit.setMinimumHeight(28)
+                edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 self.lineEdits.append(edit)
-                row = cell_index // 4
-                column = (cell_index % 4) * 2
-                group_layout.addWidget(label, row, column)
-                group_layout.addWidget(edit, row, column + 1)
+                cell_layout.addWidget(label)
+                cell_layout.addWidget(edit, 1)
+                row = cell_index // self.cells_per_row
+                column = cell_index % self.cells_per_row
+                group_layout.addWidget(cell, row, column)
+                group_layout.setColumnStretch(column, 1)
+
+            if module_index % self.module_columns == self.module_columns - 1:
+                row_layout = None
+
+        if self.module_count % self.module_columns and row_layout is not None:
+            row_layout.addStretch(1)
+        rows.addStretch(1)
 
     def setVoltageValues(self, values):
         if values is None:
