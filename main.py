@@ -41,6 +41,13 @@ RESP_SET_TIME = 0x91
 CMD_DECODE_SECU = 0xA0
 RESP_DECODE_SECU = 0xA1
 
+CAN_RX_POLL_INTERVAL_MS = 200
+CAN_RX_WAIT_TIMEOUT_MS = 0
+CAN_REQUEST_NORMAL_INTERVAL_MS = 50
+CAN_REQUEST_SILENT_INTERVAL_MS = 1000
+CAN_LOWER_SILENCE_TIMEOUT_S = 3.0
+CAN_SILENT_DIAG_TIMEOUT_S = 0.35
+
 CTRL_WORK_MODE = 0x01
 CTRL_CHNNEL = 0x02
 CTRL_PARA_CONFIG = 0x04
@@ -915,6 +922,7 @@ class Edit(Ui_Form, QWidget):
         self._set_log_scope(config.get("SAVE_LOG_SCOPE", "current"))
         self.save_log_checkbox.setChecked(int(config.get("SAVE_LOG", 0)) == 1)
         self._update_log_status()
+        self._update_request_timer_interval()
 
 
     def _current_bus_config(self):
@@ -1077,6 +1085,69 @@ class Edit(Ui_Form, QWidget):
             f"RX: {getattr(self, 'rx_frame_count', 0)}",
             "info",
         )
+
+
+    def _reset_can_link_health(self):
+        now = time.monotonic()
+        self.can_connected_monotonic = now
+        self.last_can_rx_monotonic = 0.0
+        self.can_link_silent = False
+        self._update_request_timer_interval()
+
+
+    def _is_can_link_silent(self):
+        if not getattr(self, "can_ready", False):
+            return False
+        now = time.monotonic()
+        last_rx = float(getattr(self, "last_can_rx_monotonic", 0.0) or 0.0)
+        reference = last_rx or float(getattr(self, "can_connected_monotonic", now) or now)
+        return now - reference >= CAN_LOWER_SILENCE_TIMEOUT_S
+
+
+    def _connected_can_status_text(self):
+        return getattr(self, "connected_can_status_text", "CAN: 已连接")
+
+
+    def _update_request_timer_interval(self):
+        timer = getattr(self, "timer1", None)
+        if timer is None:
+            return
+        interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
+        if timer.interval() != interval:
+            timer.setInterval(interval)
+
+
+    def _update_can_link_health(self):
+        if not getattr(self, "can_ready", False):
+            return
+        silent = self._is_can_link_silent()
+        if silent != bool(getattr(self, "can_link_silent", False)):
+            self.can_link_silent = silent
+            if silent:
+                self._set_bus_status(True, "CAN: 板卡已连接 / 下位机无响应", "warning")
+            else:
+                self._set_bus_status(True, self._connected_can_status_text(), "success")
+        self._update_request_timer_interval()
+
+
+    def _record_rx_frames(self, count):
+        count = int(count or 0)
+        if count <= 0:
+            return
+        self.rx_frame_count += count
+        self.last_can_rx_monotonic = time.monotonic()
+        if bool(getattr(self, "can_link_silent", False)):
+            self.can_link_silent = False
+            if getattr(self, "can_ready", False):
+                self._set_bus_status(True, self._connected_can_status_text(), "success")
+        self._update_rx_status()
+        self._update_request_timer_interval()
+
+
+    def _diag_timeout_s(self, timeout_s):
+        if self._is_can_link_silent():
+            return min(float(timeout_s), CAN_SILENT_DIAG_TIMEOUT_S)
+        return float(timeout_s)
 
 
     def _application_dir(self):
@@ -1916,8 +1987,7 @@ class Edit(Ui_Form, QWidget):
                 break
             flushed_count += len(frames)
         if flushed_count:
-            self.rx_frame_count += flushed_count
-            self._update_rx_status()
+            self._record_rx_frames(flushed_count)
 
 
     def _pop_diag_backlog(self, expected_id, predicate):
@@ -1929,6 +1999,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def _wait_diag_frame(self, expected_id, predicate, timeout_s, label):
+        timeout_s = self._diag_timeout_s(timeout_s)
         deadline = time.monotonic() + max(float(timeout_s), 0.0)
         while time.monotonic() <= deadline:
             frame = self._pop_diag_backlog(expected_id, predicate)
@@ -1936,10 +2007,9 @@ class Edit(Ui_Form, QWidget):
                 return frame
 
             remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
-            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 50))
+            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 20))
             if frames:
-                self.rx_frame_count += len(frames)
-                self._update_rx_status()
+                self._record_rx_frames(len(frames))
 
             for frame_index, frame in enumerate(frames):
                 if int(frame.frame_id) != int(expected_id):
@@ -1972,6 +2042,7 @@ class Edit(Ui_Form, QWidget):
 
     def _read_data_u16_sync(self, cluster_index, data_id, timeout_s=1.0, retries=0):
         data_id = int(data_id)
+        timeout_s = self._diag_timeout_s(timeout_s)
         payload = data_id.to_bytes(4, byteorder="little", signed=False) + b"\x00\x00\x00\x00"
         expected_id = self._diag_response_id(cluster_index, RESP_READ_VAR)
         last_error = None
@@ -2407,14 +2478,15 @@ class Edit(Ui_Form, QWidget):
 
 
     def _start_can_timers(self):
-        self.send_time.start(200)
-        self.send_time1.start(10)
-        self.timer1.start(10)
+        self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
+        self.send_time1.stop()
+        self.timer1.start(CAN_REQUEST_NORMAL_INTERVAL_MS)
         if self._logging_enabled():
             self._ensure_session_log_manager().set_enabled(True)
             self._attach_log_manager_to_can()
             self.timerResData.start(1000)
         self._update_log_status()
+        self._update_request_timer_interval()
 
 
     def _close_can_device(self):
@@ -2426,6 +2498,9 @@ class Edit(Ui_Form, QWidget):
                 can_device.close()
             except Exception as exc:
                 print(f"close CAN failed: {exc}")
+        self.can_connected_monotonic = 0.0
+        self.last_can_rx_monotonic = 0.0
+        self.can_link_silent = False
         self._set_bus_status(False, "CAN: 未连接", "warning")
 
 
@@ -2466,11 +2541,11 @@ class Edit(Ui_Form, QWidget):
             return False
 
         self._save_bus_config(can_config)
-        self._set_bus_status(
-            True,
-            f"CAN: 设备{can_config['can_idx']} 通道{can_config['chn']} {can_config['baud_rate']}k",
-            "success",
+        self.connected_can_status_text = (
+            f"CAN: 设备{can_config['can_idx']} 通道{can_config['chn']} {can_config['baud_rate']}k"
         )
+        self._set_bus_status(True, self.connected_can_status_text, "success")
+        self._reset_can_link_health()
         self._start_can_timers()
         return True
 
@@ -2488,6 +2563,10 @@ class Edit(Ui_Form, QWidget):
     def init(self):
         self.can_ready = False
         self.rx_frame_count = 0
+        self.can_connected_monotonic = 0.0
+        self.last_can_rx_monotonic = 0.0
+        self.can_link_silent = False
+        self.connected_can_status_text = "CAN: 已连接"
         self.c = None
         self._cluster_syncing = False
         self._setup_product_controls()
@@ -2502,13 +2581,13 @@ class Edit(Ui_Form, QWidget):
         # 给QTimer设定一个时间，每到达这个时间一次就会调用一次该方法
         self.send_time.timeout.connect(self.CANCommunication)
         # 设置QTimer开始计时，且设定时间为1000ms
-        self.send_time.start(200)
+        self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
 
         self.send_time1 = QTimer(self)
         # 给QTimer设定一个时间，每到达这个时间一次就会调用一次该方法
         self.send_time1.timeout.connect(self.RequestAlarmData)
         # 设置QTimer开始计时，且设定时间为1000ms
-        self.send_time1.start(10)
+        self.send_time1.stop()
 
         # 逐行加载数据的定时器
         self.timer = QTimer(self)
@@ -2521,7 +2600,7 @@ class Edit(Ui_Form, QWidget):
         self.timer1 = QTimer(self)
         self.timer1.timeout.connect(self.RequestBAUVAR)
         self.timer1.timeout.connect(self.RequestBCUVAR)
-        self.timer1.start(10)
+        self.timer1.start(CAN_REQUEST_NORMAL_INTERVAL_MS)
 
 
         #设置告警级别定时器
@@ -2733,14 +2812,15 @@ class Edit(Ui_Form, QWidget):
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
             return
         try:
-            self.rec = self.c._PrintReceiveData()
+            self.rec = self.c._PrintReceiveData(max_count=200, timeout_ms=CAN_RX_WAIT_TIMEOUT_MS)
         except Exception as exc:
             self._stop_can_timers()
             self._set_bus_status(False, f"CAN: 接收失败 {exc}", "danger")
             return
         if self.rec:
-            self.rx_frame_count += self.rec
-            self._update_rx_status()
+            self._record_rx_frames(self.rec)
+        else:
+            self._update_can_link_health()
         ID = ""
         #time.sleep(1)
         for i in range(0,self.rec):
@@ -3970,8 +4050,9 @@ class Edit(Ui_Form, QWidget):
             self.S21.set_status_text("当前选择 00（未编制），请选择真实簇后再读取告警参数。")
             QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能读取告警参数。")
             return
-        if self.send_time1 is not None and not self.send_time1.isActive():
-            self.send_time1.start(10)
+        if self.send_time1 is not None:
+            interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
+            self.send_time1.start(interval)
         self.S21.set_status_text(
             f"正在读取告警参数：共 {self.alarm_request_limit} 个字段。"
         )
@@ -4071,6 +4152,10 @@ class Edit(Ui_Form, QWidget):
             return
         if not self.S28.auto_refresh_enabled():
             return
+        if self._is_can_link_silent():
+            self.S28.set_status_text("CAN板卡已连接，但未收到下位机响应，自动刷新等待链路恢复。", failed=True)
+            self._update_request_timer_interval()
+            return
         self.refresh_active_alarm_page(show_dialog=False)
 
 
@@ -4081,7 +4166,7 @@ class Edit(Ui_Form, QWidget):
         frame = self._wait_diag_frame(
             expected_id,
             lambda frame: len(frame.data) >= 1 and frame.data[0] not in (0xFE, 0xFF),
-            1.5,
+            self._diag_timeout_s(1.5),
             "读取实时告警总数",
         )
         return int(frame.data[0])
@@ -4095,13 +4180,13 @@ class Edit(Ui_Form, QWidget):
         info_frame = self._wait_diag_frame(
             expected_id,
             lambda frame: len(frame.data) >= 8 and frame.data[0] == 0xFE and frame.data[1] == alarm_index,
-            1.5,
+            self._diag_timeout_s(1.5),
             "读取实时告警内容",
         )
         time_frame = self._wait_diag_frame(
             expected_id,
             lambda frame: len(frame.data) >= 8 and frame.data[0] == 0xFF and frame.data[1] == alarm_index,
-            1.5,
+            self._diag_timeout_s(1.5),
             "读取实时告警时间",
         )
         return self.decode_active_alarm_frames(info_frame, time_frame)
@@ -4249,12 +4334,21 @@ class Edit(Ui_Form, QWidget):
         global g_index
 
         if not getattr(self, "can_ready", False):
+            if getattr(self, "send_time1", None) is not None:
+                self.send_time1.stop()
             return
+        self._update_can_link_health()
+        if getattr(self, "send_time1", None) is not None:
+            interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
+            if self.send_time1.interval() != interval:
+                self.send_time1.setInterval(interval)
         Cindex = self._active_cluster_index()
         if Cindex <= 0:
             return
         request_limit = getattr(self, "alarm_request_limit", self.S21.alarm_count() * 32)
         if g_index >= request_limit:
+            if getattr(self, "send_time1", None) is not None:
+                self.send_time1.stop()
             return
 
         data_id = config["Glaoal_Index_alarm"] + g_index
@@ -4265,12 +4359,14 @@ class Edit(Ui_Form, QWidget):
         data = [b1,b2,b3,b4,0,0,0,0]
 
         if Cindex==0:
-            self.c.Transmit(0x188000F2, data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x188000F2, data, extern_flag=True, data_len=8)
         if Cindex != 0:
-            self.c.Transmit(0x1880A0F2 + ((Cindex-1) << 8), data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x1880A0F2 + ((Cindex-1) << 8), data, extern_flag=True, data_len=8)
 
         g_index = g_index+1
         if g_index >= request_limit:
+            if getattr(self, "send_time1", None) is not None:
+                self.send_time1.stop()
             self.S21.set_status_text("告警参数读取请求已发送完成，等待下位机响应刷新表格。")
 
 
@@ -4397,6 +4493,9 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBAUVAR(self):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            return
+        self._update_can_link_health()
         if self.table_index == self._current_bau_tab_index():
 
             for i in range(1):
@@ -4404,7 +4503,7 @@ class Edit(Ui_Form, QWidget):
 
                 data = self.BAUSignalQ[self.BAUSignalQ_index]
                 data = [data & 0xFF, (data >> 8) & 0xFF, (data >> 16) & 0xFF, (data >> 24) & 0xFF, 0, 0, 0, 0]
-                self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+                self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
                 self.BAUSignalQ_index = (self.BAUSignalQ_index + 1) % len(self.BAUSignalQ)
 
 
@@ -4432,6 +4531,9 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestBCUVAR(self):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            return
+        self._update_can_link_health()
         self._request_all_cluster_log_runtime_data()
 
         if self.table_index == self._realtime_monitor_tab_index():
@@ -4962,8 +5064,7 @@ class Edit(Ui_Form, QWidget):
                 break
             flushed_count += len(frames)
         if flushed_count:
-            self.rx_frame_count += flushed_count
-            self._update_rx_status()
+            self._record_rx_frames(flushed_count)
 
 
     def _pop_history_log_backlog(self, expected_id, predicate):
@@ -4996,16 +5097,16 @@ class Edit(Ui_Form, QWidget):
 
 
     def _wait_history_log_frame(self, expected_id, predicate, timeout_s, label):
+        timeout_s = self._diag_timeout_s(timeout_s)
         deadline = time.monotonic() + max(float(timeout_s), 0.0)
         while time.monotonic() <= deadline:
             frame = self._pop_history_log_backlog(expected_id, predicate)
             if frame is not None:
                 return frame
             remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
-            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 50))
+            frames = self.c.receive_frames(max_count=200, timeout_ms=min(remaining_ms, 20))
             if frames:
-                self.rx_frame_count += len(frames)
-                self._update_rx_status()
+                self._record_rx_frames(len(frames))
             for frame_index, frame in enumerate(frames):
                 if int(frame.frame_id) != int(expected_id):
                     continue
@@ -5417,46 +5518,58 @@ class Edit(Ui_Form, QWidget):
     def DIStateBAU(self):
         # J7 DI1_H
         data = [0x2D, 0, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 
         # J7 DI2_H
         data = [0x2E, 0, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 
         # J7 DI3_H
         data = [0x2F, 0, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 
         # J4 DI1_L
         data = [0x30, 0, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 
         # J4 DI2_L
         data = [0x31, 0, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 
     def DIStateClose(self):
         self.timerDI.stop()
 
     def DIStateStart(self):
-        self.timerDI.start(10)
+        interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
+        self.timerDI.start(interval)
+
+    def _transmit_can_frame(self, frame_id, data, *, extern_flag=True, data_len=8):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            return 0
+        try:
+            return self.c.Transmit(frame_id, data, extern_flag=extern_flag, data_len=data_len)
+        except Exception as exc:
+            self._stop_can_timers()
+            self._set_bus_status(False, f"CAN: 发送失败 {exc}", "danger")
+            return 0
+
     def QueryData(self,Cindex,data):
         if Cindex == 0:
-            self.c.Transmit(0x188000F2, data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x188000F2, data, extern_flag=True, data_len=8)
         if Cindex != 0:
-            self.c.Transmit(0x1880A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x1880A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
 
     def CtrlData(self,Cindex,data):
         if Cindex == 0:
-            self.c.Transmit(0x188800F2, data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x188800F2, data, extern_flag=True, data_len=8)
         if Cindex != 0:
-            self.c.Transmit(0x1888A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x1888A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
 
     def SetData(self,Cindex,data):
         if Cindex == 0:
-            self.c.Transmit(0x188200F2, data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x188200F2, data, extern_flag=True, data_len=8)
         if Cindex != 0:
-            self.c.Transmit(0x1882A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
+            self._transmit_can_frame(0x1882A0F2 + ((Cindex - 1) << 8), data, extern_flag=True, data_len=8)
 
     def ParProcess(self):
         Cindex = self._active_cluster_index()
@@ -5629,7 +5742,7 @@ class Edit(Ui_Form, QWidget):
         elif index==4:
             temp = int(self.S23.lineEdit_11.text())
         data = [temp & 0xFF, (temp >> 8) & 0xFF, 0, 0, 0, 0, 0, 0]
-        self.c.Transmit(0x1880EFF2, data, extern_flag=True, data_len=8)
+        self._transmit_can_frame(0x1880EFF2, data, extern_flag=True, data_len=8)
 #row 0 col 1
 def IndexTrans(row,col,data,TB):
     row_index = row * 32 + config["Glaoal_Index_alarm"]

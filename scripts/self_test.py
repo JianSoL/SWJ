@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
@@ -261,6 +262,32 @@ def test_main_window_offscreen_logging():
             _assert("实时告警" in tab_names, "active alarm tab is missing")
             _assert("实时监控" in tab_names, "realtime monitor tab is missing")
             _assert(window.S28.auto_refresh_checkbox.isChecked(), "active alarm auto refresh should be enabled by default")
+            _assert(not window.send_time1.isActive(), "alarm parameter poll timer should stay stopped by default")
+            window.can_ready = True
+            window.can_connected_monotonic = time.monotonic() - main_module.CAN_LOWER_SILENCE_TIMEOUT_S - 1
+            window.last_can_rx_monotonic = 0
+            window.timer1.setInterval(main_module.CAN_REQUEST_NORMAL_INTERVAL_MS)
+            window._update_can_link_health()
+            _assert(window.can_link_silent is True, "silent CAN link should enter degraded mode")
+            _assert(
+                window.timer1.interval() == main_module.CAN_REQUEST_SILENT_INTERVAL_MS,
+                "silent CAN link should slow request polling",
+            )
+            refresh_calls = []
+            original_refresh_active_alarm = window.refresh_active_alarm_page
+            try:
+                window.table_index = window._active_alarm_tab_index()
+                window.refresh_active_alarm_page = lambda show_dialog=False: refresh_calls.append(show_dialog)
+                window._refresh_active_alarm_page_if_visible(force=True)
+            finally:
+                window.refresh_active_alarm_page = original_refresh_active_alarm
+            _assert(not refresh_calls, "active alarm auto refresh should skip blocking reads while CAN is silent")
+            window._record_rx_frames(1)
+            _assert(window.can_link_silent is False, "CAN RX should restore normal link mode")
+            _assert(
+                window.timer1.interval() == main_module.CAN_REQUEST_NORMAL_INTERVAL_MS,
+                "CAN RX should restore normal request polling",
+            )
             window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
             _assert(36 in window.realtime_monitor_signal_ids, "realtime monitor should poll DI indexes")
             _assert(112 in window.realtime_monitor_signal_ids, "realtime monitor should poll RT indexes")
