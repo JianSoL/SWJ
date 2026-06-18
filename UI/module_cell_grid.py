@@ -24,7 +24,7 @@ class ModuleCellGrid(QWidget):
         self.mode = mode
         self.module_count = int(config["LECU_NUM"])
         self.cells_per_module = int(cells_per_module or config["CELL_NUM"])
-        self.module_columns = 2 if self.module_count > 1 else 1
+        self.module_columns = 1
         self.cells_per_row = min(4, max(1, self.cells_per_module))
         self.lineEdits = []
         self.comboBox = QComboBox(self)

@@ -25,7 +25,7 @@ class BalanceControlPage(QWidget):
         super().__init__()
         self.module_count = int(config["LECU_NUM"])
         self.cells_per_module = int(config["CELL_NUM"])
-        self.module_columns = 2 if self.module_count > 1 else 1
+        self.module_columns = 1
         self.cells_per_row = min(4, max(1, self.cells_per_module))
         self.checks = []
         self.state_labels = []
