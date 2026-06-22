@@ -220,6 +220,42 @@ def test_main_window_offscreen_logging():
         _assert(window._active_cluster_index() == 0, "00 uncompiled cluster should be selectable")
         _assert(window.cluster_selector.currentData() == 0, "cluster selector should sync to 00 uncompiled option")
 
+        original_active_cluster = window._active_cluster_index()
+        window._set_active_cluster(1, refresh=False, source="self_test")
+        original_c = getattr(window, "c", None)
+        original_can_ready = getattr(window, "can_ready", False)
+        original_table_index = getattr(window, "table_index", 0)
+        original_signal_ids = tuple(window.realtime_monitor_signal_ids)
+        original_query_index = window.realtime_monitor_query_index
+        original_query_data = window.QueryData
+        try:
+            window.c = SimpleNamespace()
+            window.can_ready = True
+            window.can_connected_monotonic = time.monotonic()
+            window.last_can_rx_monotonic = time.monotonic()
+            window.table_index = window._realtime_monitor_tab_index()
+            window.realtime_monitor_signal_ids = (101, 102, 103, 104)
+            window.realtime_monitor_query_index = 0
+            sent_monitor_queries = []
+            window.QueryData = lambda cluster_index, data: sent_monitor_queries.append((cluster_index, list(data)))
+            window.RequestBCUVAR()
+            _assert(
+                len(sent_monitor_queries) == main_module.CAN_REQUEST_BURST_PER_TICK,
+                "realtime monitor request should batch multiple indexes per tick",
+            )
+            _assert(
+                window.realtime_monitor_query_index == main_module.CAN_REQUEST_BURST_PER_TICK,
+                "realtime monitor query cursor should advance by request burst",
+            )
+        finally:
+            window.QueryData = original_query_data
+            window.realtime_monitor_signal_ids = original_signal_ids
+            window.realtime_monitor_query_index = original_query_index
+            window.table_index = original_table_index
+            window.can_ready = original_can_ready
+            window.c = original_c
+            window._set_active_cluster(original_active_cluster, refresh=False, source="self_test")
+
         window._cache_host_control_snapshot(1, {"work_mode": main_module.WORK_MODE_GZ_TEST}, merge=False)
         window._cache_host_control_snapshot(2, {"work_mode": main_module.WORK_MODE_NORMAL}, merge=False)
         window._set_active_cluster(1, refresh=False, source="self_test")
