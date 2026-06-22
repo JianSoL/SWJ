@@ -123,6 +123,33 @@ def test_session_logger_files():
     _assert(voltage_rows[1][1:] == ["3301", "3302"], "voltage snapshot mismatch")
 
 
+def test_module_cell_grid_module_extrema():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from PyQt6.QtWidgets import QApplication
+
+    from UI import module_cell_grid
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    original_module_count = module_cell_grid.config.get("LECU_NUM")
+    try:
+        module_cell_grid.config["LECU_NUM"] = 2
+        grid = module_cell_grid.ModuleCellGrid("self test", "mV", mode="numeric", cells_per_module=2)
+        try:
+            grid.setVoltageValues([1, 9, 100, 200])
+            _assert("#fef9c3" in grid.lineEdits[0].styleSheet(), "module 1 minimum should be highlighted")
+            _assert("#fee2e2" in grid.lineEdits[1].styleSheet(), "module 1 maximum should be highlighted")
+            _assert("#fef9c3" in grid.lineEdits[2].styleSheet(), "module 2 minimum should be highlighted")
+            _assert("#fee2e2" in grid.lineEdits[3].styleSheet(), "module 2 maximum should be highlighted")
+        finally:
+            grid.close()
+    finally:
+        module_cell_grid.config["LECU_NUM"] = original_module_count
+        if created_app:
+            app.quit()
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -426,6 +453,7 @@ def main():
     tests = [
         test_configuration_round_trip,
         test_session_logger_files,
+        test_module_cell_grid_module_extrema,
         test_main_window_offscreen_logging,
     ]
     failures = []

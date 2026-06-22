@@ -100,13 +100,29 @@ class ModuleCellGrid(QWidget):
         if values is None:
             return
         values = list(values)
-        numeric_values = [value for value in values if isinstance(value, (int, float))]
-        max_value = max(numeric_values) if numeric_values else None
-        min_value = min(numeric_values) if numeric_values else None
+        module_extremes = self._module_extremes(values)
         for index, edit in enumerate(self.lineEdits):
             value = values[index] if index < len(values) else ""
+            module_index = index // self.cells_per_module if self.cells_per_module else 0
+            max_value, min_value = module_extremes.get(module_index, (None, None))
             edit.setText(self._format_value(value))
             edit.setStyleSheet(self._style_for_value(value, max_value, min_value))
+
+    def _module_extremes(self, values):
+        module_extremes = {}
+        if self.cells_per_module <= 0:
+            return module_extremes
+        for module_index in range(self.module_count):
+            start = module_index * self.cells_per_module
+            end = start + self.cells_per_module
+            numeric_values = [
+                numeric_value
+                for numeric_value in (self._numeric_value(value) for value in values[start:end])
+                if numeric_value is not None
+            ]
+            if numeric_values:
+                module_extremes[module_index] = (max(numeric_values), min(numeric_values))
+        return module_extremes
 
     def clearValues(self):
         for edit in self.lineEdits:
@@ -120,19 +136,35 @@ class ModuleCellGrid(QWidget):
             return f"{value} {self.unit}"
         return str(value)
 
+    def _numeric_value(self, value):
+        if value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return value
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
     def _style_for_value(self, value, max_value, min_value):
+        numeric_value = self._numeric_value(value)
         if self.mode == "balance":
-            if int(value or 0):
+            if int(numeric_value or 0):
                 return "background-color: #dcfce7; color: #166534; font-weight: 800;"
             return "background-color: #f8fafc; color: #475569;"
         if self.mode == "abnormal":
-            if int(value or 0) > 10:
+            abnormal_value = int(numeric_value or 0)
+            if abnormal_value > 10:
                 return "background-color: #ef5350; color: white; font-weight: 800;"
-            if int(value or 0) > 0:
+            if abnormal_value > 0:
                 return "background-color: #fff59d; color: #172033;"
             return "background-color: #c8e6c9; color: #172033;"
-        if max_value is not None and min_value is not None and max_value != min_value and value == max_value:
+        if numeric_value is None:
+            return ""
+        if max_value is not None and min_value is not None and max_value != min_value and numeric_value == max_value:
             return "background-color: #fee2e2; color: #991b1b; font-weight: 800;"
-        if max_value is not None and min_value is not None and max_value != min_value and value == min_value:
+        if max_value is not None and min_value is not None and max_value != min_value and numeric_value == min_value:
             return "background-color: #fef9c3; color: #854d0e; font-weight: 800;"
         return ""
