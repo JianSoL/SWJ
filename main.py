@@ -11,6 +11,9 @@ from ZLGCanControl import Communication
 from UI.Q14 import Ui_Form
 from UI.T33 import HistoryLogRecord
 from application.configuration import (
+    LOG_INTERVAL_CONFIG_KEY,
+    LOG_INTERVAL_DEFAULT_MS,
+    LOG_INTERVAL_LIMIT_MS,
     RUNTIME_SYSTEM_CONFIG_KEYS,
     RUNTIME_SYSTEM_CONFIG_LIMITS,
     build_cluster_addresses,
@@ -407,7 +410,7 @@ class Edit(Ui_Form, QWidget):
         self.product_command_layout.addWidget(self.has_neutral_checkbox)
 
         self.system_config_button = QPushButton("系统配置", self.product_command_bar)
-        self.system_config_button.setToolTip("配置可切换簇数、模组数、每模组单体数和每模组温度数。保存后重启生效。")
+        self.system_config_button.setToolTip("配置可切换簇数、模组数、每模组单体数、每模组温度数和日志存储间隔。")
         self.system_config_button.clicked.connect(self.on_system_config_requested)
         self.product_command_layout.addWidget(self.system_config_button)
 
@@ -949,6 +952,7 @@ class Edit(Ui_Form, QWidget):
 
     def on_system_config_requested(self):
         current_values = self._runtime_system_config_values()
+        current_log_interval_ms = self._stored_log_save_interval_ms()
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("系统配置")
         dialog.setModal(True)
@@ -956,7 +960,7 @@ class Edit(Ui_Form, QWidget):
         layout.setContentsMargins(16, 16, 16, 12)
         layout.setSpacing(12)
 
-        hint = QLabel("结构配置保存到 config.json，重启软件后完整生效。", dialog)
+        hint = QLabel("结构配置保存到 config.json，重启软件后完整生效；日志存储间隔保存后立即生效。", dialog)
         hint.setObjectName("sectionHint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -983,6 +987,17 @@ class Edit(Ui_Form, QWidget):
             form.addRow(label_text, spinbox)
             spinboxes[key] = spinbox
 
+        min_log_seconds = max(1, LOG_INTERVAL_LIMIT_MS[0] // 1000)
+        max_log_seconds = max(min_log_seconds, LOG_INTERVAL_LIMIT_MS[1] // 1000)
+        log_interval_spinbox = QSpinBox(dialog)
+        log_interval_spinbox.setRange(min_log_seconds, max_log_seconds)
+        log_interval_spinbox.setValue(
+            max(min_log_seconds, min((current_log_interval_ms + 999) // 1000, max_log_seconds))
+        )
+        log_interval_spinbox.setSuffix(" 秒")
+        log_interval_spinbox.setMinimumWidth(140)
+        form.addRow("日志存储间隔", log_interval_spinbox)
+
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
@@ -996,15 +1011,36 @@ class Edit(Ui_Form, QWidget):
             return
 
         new_values = {key: int(spinbox.value()) for key, spinbox in spinboxes.items()}
+        new_log_interval_ms = int(log_interval_spinbox.value()) * 1000
         can_config = self._current_bus_config()
         can_config.update(new_values)
+        can_config[LOG_INTERVAL_CONFIG_KEY] = new_log_interval_ms
         saved = self._save_bus_config(can_config)
+        saved_log_interval_ms = self._normalize_log_save_interval_ms(
+            saved.get(LOG_INTERVAL_CONFIG_KEY, new_log_interval_ms)
+        )
+        config[LOG_INTERVAL_CONFIG_KEY] = saved_log_interval_ms
+        self._apply_log_save_interval()
 
-        if any(int(saved.get(key, current_values[key])) != current_values[key] for key in RUNTIME_SYSTEM_CONFIG_KEYS):
+        structure_changed = any(
+            int(saved.get(key, current_values[key])) != current_values[key]
+            for key in RUNTIME_SYSTEM_CONFIG_KEYS
+        )
+        log_interval_changed = saved_log_interval_ms != current_log_interval_ms
+        if structure_changed:
+            message = "可切换簇数、模组数、每模组单体数和每模组温度数已保存；请重启软件让界面、缓存和日志列全部按新配置生成。"
+            if log_interval_changed:
+                message += f"\n日志存储间隔已设置为 {self._format_log_save_interval()}，已立即生效。"
             QMessageBox.information(
                 self,
                 "系统配置已保存",
-                "可切换簇数、模组数、每模组单体数和每模组温度数已保存；请重启软件让界面、缓存和日志列全部按新配置生成。",
+                message,
+            )
+        elif log_interval_changed:
+            QMessageBox.information(
+                self,
+                "系统配置已保存",
+                f"日志存储间隔已设置为 {self._format_log_save_interval()}，已立即生效。",
             )
         else:
             QMessageBox.information(self, "系统配置", "配置未变化。")
@@ -1158,6 +1194,44 @@ class Edit(Ui_Form, QWidget):
 
     def _runtime_log_dir(self):
         return os.path.join(self._application_dir(), "hisData")
+
+
+    def _normalize_log_save_interval_ms(self, value):
+        min_value, max_value = LOG_INTERVAL_LIMIT_MS
+        try:
+            interval_ms = int(value)
+        except (TypeError, ValueError):
+            interval_ms = LOG_INTERVAL_DEFAULT_MS
+        return max(min_value, min(interval_ms, max_value))
+
+
+    def _stored_log_save_interval_ms(self):
+        saved_config = load_can_board_config()
+        return self._normalize_log_save_interval_ms(
+            saved_config.get(LOG_INTERVAL_CONFIG_KEY, config.get(LOG_INTERVAL_CONFIG_KEY, LOG_INTERVAL_DEFAULT_MS))
+        )
+
+
+    def _log_save_interval_ms(self):
+        interval_ms = self._normalize_log_save_interval_ms(config.get(LOG_INTERVAL_CONFIG_KEY, LOG_INTERVAL_DEFAULT_MS))
+        config[LOG_INTERVAL_CONFIG_KEY] = interval_ms
+        return interval_ms
+
+
+    def _format_log_save_interval(self):
+        interval_ms = self._log_save_interval_ms()
+        if interval_ms % 1000 == 0:
+            return f"{interval_ms // 1000}s"
+        seconds_text = f"{interval_ms / 1000:.3f}".rstrip("0").rstrip(".")
+        return f"{seconds_text}s"
+
+
+    def _apply_log_save_interval(self):
+        timer = getattr(self, "timerResData", None)
+        interval_ms = self._log_save_interval_ms()
+        if timer is not None:
+            timer.setInterval(interval_ms)
+        self._update_log_status()
 
 
     def _log_cluster_indices(self):
@@ -1385,7 +1459,8 @@ class Edit(Ui_Form, QWidget):
         enabled = self._logging_enabled()
         manager = getattr(self, "session_log_manager", None)
         scope_text = self._log_scope_text()
-        text = f"日志: {'开' if enabled else '关'} / {scope_text}"
+        interval_text = self._format_log_save_interval()
+        text = f"日志: {'开' if enabled else '关'} / {scope_text} / {interval_text}"
         label = getattr(self, "log_status_label", None)
         self._set_status_pill(
             label,
@@ -1395,10 +1470,10 @@ class Edit(Ui_Form, QWidget):
         if label is not None:
             if enabled and manager is not None and manager.enabled:
                 label.setToolTip(
-                    f"保存范围: {scope_text}\n当前日志会话: {manager.session_name}\n目录: {self._runtime_log_dir()}"
+                    f"保存范围: {scope_text}\n保存间隔: {interval_text}\n当前日志会话: {manager.session_name}\n目录: {self._runtime_log_dir()}"
                 )
             else:
-                label.setToolTip(f"日志未开启\n保存范围: {scope_text}")
+                label.setToolTip(f"日志未开启\n保存范围: {scope_text}\n保存间隔: {interval_text}")
 
 
     def on_log_scope_changed(self, _index):
@@ -1414,7 +1489,7 @@ class Edit(Ui_Form, QWidget):
         timer = getattr(self, "timerResData", None)
         if timer is not None:
             if checked and getattr(self, "can_ready", False):
-                timer.start(1000)
+                timer.start(self._log_save_interval_ms())
             else:
                 timer.stop()
         self._update_log_status()
@@ -2484,7 +2559,7 @@ class Edit(Ui_Form, QWidget):
         if self._logging_enabled():
             self._ensure_session_log_manager().set_enabled(True)
             self._attach_log_manager_to_can()
-            self.timerResData.start(1000)
+            self.timerResData.start(self._log_save_interval_ms())
         self._update_log_status()
         self._update_request_timer_interval()
 

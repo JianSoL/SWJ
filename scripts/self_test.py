@@ -34,6 +34,7 @@ def _set_snapshot_value(record, key_prefix, value):
 def test_configuration_round_trip():
     from application.configuration import (
         DEFAULT_CAN_BOARD_CONFIG,
+        LOG_INTERVAL_CONFIG_KEY,
         build_cluster_addresses,
         build_cluster_indices,
         load_can_board_config,
@@ -54,6 +55,7 @@ def test_configuration_round_trip():
                 "LECU_NUM": "8",
                 "CELL_NUM": "20",
                 "CELL_Tem_NUM": "12",
+                LOG_INTERVAL_CONFIG_KEY: "2500",
             },
             config_path,
         )
@@ -67,8 +69,10 @@ def test_configuration_round_trip():
     _assert(loaded["LECU_NUM"] == 8, "module count should be normalized to int")
     _assert(loaded["CELL_NUM"] == 20, "cell count should be normalized to int")
     _assert(loaded["CELL_Tem_NUM"] == 12, "temperature count should be normalized to int")
+    _assert(loaded[LOG_INTERVAL_CONFIG_KEY] == 2500, "log interval should be normalized to int milliseconds")
     _assert(overrides["BCU_NUM"] == 4, "runtime override should include cluster count")
     _assert(overrides["CELL_Tem_NUM"] == 12, "runtime override should include temperature count")
+    _assert(overrides[LOG_INTERVAL_CONFIG_KEY] == 2500, "runtime override should include log interval")
     _assert(load_can_board_config("__missing_config__.json") == DEFAULT_CAN_BOARD_CONFIG, "missing config should use defaults")
 
     runtime_config = {"BCU_NUM": 2, "ADDRESLIST": ["00", "A0", "A1", "A2"]}
@@ -142,6 +146,20 @@ def test_main_window_offscreen_logging():
             window.cluster_selector.currentData() > 0,
             "default cluster selector should still choose the first compiled cluster",
         )
+        original_log_interval = main_module.config.get(
+            main_module.LOG_INTERVAL_CONFIG_KEY,
+            main_module.LOG_INTERVAL_DEFAULT_MS,
+        )
+        try:
+            main_module.config[main_module.LOG_INTERVAL_CONFIG_KEY] = 2500
+            _assert(window._log_save_interval_ms() == 2500, "log interval helper should read runtime config")
+            window.timerResData.start(1000)
+            window._apply_log_save_interval()
+            _assert(window.timerResData.interval() == 2500, "log timer should apply configured interval")
+            window.timerResData.stop()
+        finally:
+            main_module.config[main_module.LOG_INTERVAL_CONFIG_KEY] = original_log_interval
+
         original_has_n = main_module.config.get("Has_N", 0)
         try:
             window._set_has_neutral(1, persist=False, refresh=True)

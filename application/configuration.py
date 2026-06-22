@@ -13,6 +13,7 @@ DEFAULT_CAN_BOARD_CONFIG = {
     "LECU_NUM": 6,
     "CELL_NUM": 16,
     "CELL_Tem_NUM": 16,
+    "SAVE_LOG_INTERVAL_MS": 1000,
 }
 
 RUNTIME_SYSTEM_CONFIG_KEYS = (
@@ -28,6 +29,10 @@ RUNTIME_SYSTEM_CONFIG_LIMITS = {
     "CELL_NUM": (1, 32),
     "CELL_Tem_NUM": (1, 32),
 }
+
+LOG_INTERVAL_CONFIG_KEY = "SAVE_LOG_INTERVAL_MS"
+LOG_INTERVAL_DEFAULT_MS = DEFAULT_CAN_BOARD_CONFIG[LOG_INTERVAL_CONFIG_KEY]
+LOG_INTERVAL_LIMIT_MS = (1000, 3600000)
 
 
 def project_root():
@@ -76,6 +81,12 @@ def _normalize_can_board_config(values):
     for key in RUNTIME_SYSTEM_CONFIG_KEYS:
         min_value, max_value = RUNTIME_SYSTEM_CONFIG_LIMITS[key]
         normalized[key] = _normalize_int(normalized.get(key), DEFAULT_CAN_BOARD_CONFIG[key], min_value, max_value)
+    normalized[LOG_INTERVAL_CONFIG_KEY] = _normalize_int(
+        normalized.get(LOG_INTERVAL_CONFIG_KEY),
+        LOG_INTERVAL_DEFAULT_MS,
+        LOG_INTERVAL_LIMIT_MS[0],
+        LOG_INTERVAL_LIMIT_MS[1],
+    )
     return normalized
 
 
@@ -119,7 +130,7 @@ def load_runtime_config_overrides(file_name="config.json"):
     normalized = _normalize_can_board_config(loaded)
     return {
         key: normalized[key]
-        for key in ("Has_N",) + RUNTIME_SYSTEM_CONFIG_KEYS
+        for key in ("Has_N", LOG_INTERVAL_CONFIG_KEY) + RUNTIME_SYSTEM_CONFIG_KEYS
         if key in loaded
     }
 
