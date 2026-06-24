@@ -1,0 +1,383 @@
+VERSION ""
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: BAU BCU
+
+
+BO_ 3221225472 VECTOR__INDEPENDENT_SIG_MSG: 0 Vector__XXX
+ SG_ Alarm_Value : 0|16@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Alarm_TH : 0|16@1- (1,0) [0|0] "" Vector__XXX
+ SG_ AFE_No : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Alarm_Cell_No : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ AlarmLevel : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ AlarmID_UP_DOWN : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ AlarmID : 0|7@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Cell_Voltage_NUM : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ HMax_DisCharge_Current_DOWN : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ HMax_Charge_Current_DOWN : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ HMax_DisCharge_Current_UP : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ HMax_Charge_Current_UP : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ NDisChargeRelay_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PDischageRelay_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ V24Relay_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ BreakOff_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ NChageRelay_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PChargeRelay_B : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ NChageRelay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ BreakOff : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PDischageRelay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ V24Relay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ NDisChargeRelay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PPreChargeRelay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PChargeRelay : 0|1@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ BAU_Branch_State : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ BAU_STATE : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ PreChargeFial : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Save_Command : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Ctrl_Command : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2466574240 BCU1304EFA0: 8 Vector__XXX
+ SG_ Current_Discharging_KWH_DOWN : 48|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Current_charging_KWH_DOWN : 32|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Dischargeable_KWH_DOWN : 16|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Chargeable_battery_KWH_DOWN : 0|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+
+BO_ 2449797024 BCU1204EFA0: 8 BCU
+ SG_ Current_Discharging_KWH_UP : 48|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Current_charging_KWH_UP : 32|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Dischargeable_KWH_UP : 16|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+ SG_ Chargeable_battery_KWH_UP : 0|16@1+ (0.01,0) [0|0] "KWH" Vector__XXX
+
+BO_ 2449862560 BCU1205EFA0: 8 Vector__XXX
+ SG_ ACC_DisCharge_KWH : 32|32@1+ (0.1,0) [0|0] "KWH" Vector__XXX
+ SG_ ACC_Charge_KWH : 0|32@1+ (0.1,0) [0|0] "KWH" Vector__XXX
+
+BO_ 2452221856 BCU1229EFA0: 8 Vector__XXX
+
+BO_ 2449928096 BCU1206EFA0: 8 BCU
+ SG_ Cell_MIN_Voltage_DOWN : 32|16@1+ (1,0) [0|0] "mV" Vector__XXX
+ SG_ Cell_MAX_Voltage_DOWN : 16|16@1+ (1,0) [0|0] "mV" Vector__XXX
+
+BO_ 2465333482 BAU12F200EA: 8 BAU
+ SG_ FORCE_CHG_FLAG : 8|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Ctrl_Command_DOWN : 40|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Ctrl_Command_UP : 32|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ BCU_Address : 0|8@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2452156320 BCU1228EFA0: 8 Vector__XXX
+ SG_ SYS_ACTV_ALM_NUM : 48|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ MOST_SEVERE_LEVEL_DOWN : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ MOST_SEVERE_LEVEL_UP : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2450255776 BCU120BEFA0: 8 Vector__XXX
+ SG_ VAR_DTR_S : 32|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Ave_Cell_Voltage_Tem : 16|16@1- (0.1,0) [0|0] "℃" Vector__XXX
+ SG_ Ave_Cell_Voltage : 0|16@1- (1,0) [0|0] "mV" Vector__XXX
+
+BO_ 2450190240 BCU120AEFA0: 8 Vector__XXX
+ SG_ Min_Cell_Tem_No_L : 56|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Min_Cell_Tem_No_H : 48|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Max_Cell_Tem_No_L : 40|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Max_Cell_Tem_No_H : 32|8@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Min_Cell_Tem : 16|16@1- (0.1,0) [0|0] "℃" Vector__XXX
+ SG_ Max_Cell_Tem : 0|16@1- (0.1,0) [0|0] "℃" Vector__XXX
+
+BO_ 2450059168 BCU1208EFA0: 8 BCU
+ SG_ CONFIG_CELL_NUM : 48|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ ONLINE_LECU_NUM : 32|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Valid_Cell_Tem_NUM : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Valid_Cell_Voltage_NUM : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2466770848 BCU1307EFA0: 8 Vector__XXX
+ SG_ CTR_S_DOWN : 32|16@1- (1,0) [0|0] "S" Vector__XXX
+ SG_ Max_DisCharge_Current_DOWN : 16|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ Max_Charge_Current_DOWN : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+
+BO_ 2449993632 BCU1207EFA0: 8 BCU
+ SG_ CTR_S_UP : 32|16@1- (1,0) [0|0] "S" Vector__XXX
+ SG_ Max_DisCharge_Current_UP : 16|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+ SG_ Max_Charge_Current_UP : 0|16@1+ (0.1,0) [0|0] "A" Vector__XXX
+
+BO_ 2449731488 BCU1203EFA0: 8 Vector__XXX
+ SG_ Cell_MIN_Voltage_UP : 48|16@1+ (1,0) [0|0] "mV" Vector__XXX
+ SG_ Cell_MAX_Voltage_UP : 16|16@1+ (1,0) [0|0] "mV" Vector__XXX
+ SG_ Power_Voltage : 32|16@1+ (0.1,0) [0|0] "V" Vector__XXX
+ SG_ SOH : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2466443168 BCU1302EFA0: 8 Vector__XXX
+ SG_ SOC_disp_DOWN : 48|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2449665952 BCU1202EFA0: 8 BCU
+ SG_ Nres : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ Pres : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ SOC_disp_UP : 48|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2466377632 BCU1301EFA0: 8 Vector__XXX
+ SG_ Power_Voltage_DOWN : 48|16@1- (0.1,0) [0|0] "V" Vector__XXX
+ SG_ BatteryVoltage : 32|16@1+ (0.1,0) [0|0] "V" Vector__XXX
+ SG_ Current_DOWN : 16|16@1- (0.1,0) [0|0] "A" Vector__XXX
+ SG_ BatteryVoltage_DOWN : 0|16@1+ (0.1,0) [0|0] "V" Vector__XXX
+
+BO_ 2415919105 BCU10000001: 8 BCU
+ SG_ RunTime : 0|32@1+ (1,0) [0|0] "s" Vector__XXX
+
+BO_ 2449600416 BCU1201EFA0: 8 BCU
+ SG_ Power_Voltage_UP : 48|16@1+ (0.1,0) [0|0] "V" Vector__XXX
+ SG_ Battery_Run_State_DOWN : 40|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Battery_Run_State_UP : 32|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Current_UP : 16|16@1- (0.1,0) [0|0] "A" Vector__XXX
+ SG_ BatteryVoltage_UP : 0|16@1+ (0.1,0) [0|0] "V" Vector__XXX
+
+BO_ 2450321312 BCU120CEFA0: 8 BCU
+ SG_ DI_STATUS : 16|16@1+ (1,0) [0|0] "" Vector__XXX
+ SG_ RELAY_STATUS : 0|16@1+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 2450124704 BCU1209EFA0: 8 BCU
+ SG_ Cell_MIN_Vlotage_NO_L : 48|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Cell_MIN_Vlotage_NO_H : 56|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Cell_MAX_Vlotage_NO_L : 32|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Cell_MAX_Vlotage_NO_H : 40|8@1- (1,0) [0|0] "" Vector__XXX
+ SG_ Cell_MIN_Voltage : 16|16@1+ (1,0) [0|0] "mV" Vector__XXX
+ SG_ Cell_MAX_Voltage : 0|16@1+ (1,0) [0|0] "mV" Vector__XXX
+
+
+
+CM_ BO_ 3221225472 "This is a message for not used signals, created by Vector CANdb++ DBC OLE DB Provider.";
+CM_ SG_ 3221225472 Alarm_Value "告警值
+";
+CM_ SG_ 3221225472 Alarm_TH "告警阈值";
+CM_ SG_ 3221225472 AFE_No "AFE编号";
+CM_ SG_ 3221225472 Alarm_Cell_No "电池编号1-32";
+CM_ SG_ 3221225472 AlarmLevel "告警等级";
+CM_ SG_ 3221225472 AlarmID_UP_DOWN "0上半簇1下半簇";
+CM_ SG_ 3221225472 AlarmID "0上半簇1下半簇";
+CM_ SG_ 3221225472 Cell_Voltage_NUM "单体电压个数";
+CM_ SG_ 3221225472 HMax_DisCharge_Current_DOWN "历史最大允许放电电流下半簇";
+CM_ SG_ 3221225472 HMax_Charge_Current_DOWN "历史最大允许充电电流下半簇";
+CM_ SG_ 3221225472 HMax_DisCharge_Current_UP "历史最大允许放电电流上半簇";
+CM_ SG_ 3221225472 HMax_Charge_Current_UP "历史最大允许充电电流上半簇";
+CM_ SG_ 3221225472 NDisChargeRelay_B "主负放电继电器";
+CM_ SG_ 3221225472 PDischageRelay_B "主正放电继电器";
+CM_ SG_ 3221225472 V24Relay_B "24继电器";
+CM_ SG_ 3221225472 BreakOff_B "断路器";
+CM_ SG_ 3221225472 NChageRelay_B "主负充电继电器";
+CM_ SG_ 3221225472 PChargeRelay_B "主正充电继电器";
+CM_ SG_ 3221225472 NChageRelay "主负充电";
+CM_ SG_ 3221225472 BreakOff "断路器";
+CM_ SG_ 3221225472 PDischageRelay "主正放电";
+CM_ SG_ 3221225472 V24Relay "24继电器";
+CM_ SG_ 3221225472 NDisChargeRelay "主负放电";
+CM_ SG_ 3221225472 PPreChargeRelay "正极预充";
+CM_ SG_ 3221225472 PChargeRelay "主正充电";
+CM_ SG_ 3221225472 Save_Command "存储命令";
+CM_ SG_ 3221225472 Ctrl_Command "控制命令(预留)";
+CM_ SG_ 2466574240 Current_Discharging_KWH_DOWN "有中线：单次放电电量下半簇
+无中线：NULL";
+CM_ SG_ 2466574240 Current_charging_KWH_DOWN "有中线：单次充电电量下半簇
+无中线：NULL";
+CM_ SG_ 2466574240 Dischargeable_KWH_DOWN "有中线：可放充电电量下半簇
+无中线：NULL";
+CM_ SG_ 2466574240 Chargeable_battery_KWH_DOWN "有中线：可充电电量下半簇
+无中线：NULL";
+CM_ SG_ 2449797024 Current_Discharging_KWH_UP "有中线：单次放电电量上半簇
+无中线：单次放电电量";
+CM_ SG_ 2449797024 Current_charging_KWH_UP "有中线：单次充电电量上半簇
+无中线：单次充电电量";
+CM_ SG_ 2449797024 Dischargeable_KWH_UP "有中线：可放充电电量上半簇
+无中线：可放充电电量";
+CM_ SG_ 2449797024 Chargeable_battery_KWH_UP "有中线：可充电电量上半簇
+无中线：可充电电量";
+CM_ SG_ 2449862560 ACC_DisCharge_KWH "累计放电瓦时";
+CM_ SG_ 2449862560 ACC_Charge_KWH "累计充电瓦时";
+CM_ SG_ 2449928096 Cell_MIN_Voltage_DOWN "最小电压下半簇";
+CM_ SG_ 2449928096 Cell_MAX_Voltage_DOWN "最大电压下半簇";
+CM_ SG_ 2465333482 FORCE_CHG_FLAG "强充标志";
+CM_ SG_ 2465333482 Ctrl_Command_DOWN "控制命令下半簇";
+CM_ SG_ 2465333482 Ctrl_Command_UP "有中线：控制命令上半簇
+无中线：控制命令";
+CM_ SG_ 2452156320 MOST_SEVERE_LEVEL_DOWN "下蔟最严重告警等级";
+CM_ SG_ 2452156320 MOST_SEVERE_LEVEL_UP "有中线：上蔟最严重告警等级
+无中线：最严重告警等级";
+CM_ SG_ 2450255776 VAR_DTR_S "剩余放电时间整簇";
+CM_ SG_ 2450255776 Ave_Cell_Voltage_Tem "平均电压";
+CM_ SG_ 2450255776 Ave_Cell_Voltage "平均电压";
+CM_ SG_ 2450190240 Min_Cell_Tem_No_L "低字节：电池编号，1-32；
+";
+CM_ SG_ 2450190240 Min_Cell_Tem_No_H "高字节：从板编号，1-36；";
+CM_ SG_ 2450190240 Max_Cell_Tem_No_L "低字节：电池编号，1-32；
+";
+CM_ SG_ 2450190240 Max_Cell_Tem_No_H "高字节：从板编号，1-36；";
+CM_ SG_ 2450059168 CONFIG_CELL_NUM "单体电压个数";
+CM_ SG_ 2450059168 ONLINE_LECU_NUM "在线从板个数";
+CM_ SG_ 2450059168 Valid_Cell_Tem_NUM "有效单体温度个数";
+CM_ SG_ 2450059168 Valid_Cell_Voltage_NUM "有效单体电压个数";
+CM_ SG_ 2466770848 CTR_S_DOWN "充电剩余时间下半簇";
+CM_ SG_ 2466770848 Max_DisCharge_Current_DOWN "最大允许放电电流下半簇";
+CM_ SG_ 2466770848 Max_Charge_Current_DOWN "最大允许充电电流下半簇";
+CM_ SG_ 2449993632 CTR_S_UP "有中线：充电剩余时间上半簇
+无中线：充电剩余时间";
+CM_ SG_ 2449993632 Max_DisCharge_Current_UP "有中线：最大允许放电电流上半簇
+无中线：最大允许放电电流
+";
+CM_ SG_ 2449993632 Max_Charge_Current_UP "有中线：最大允许充电电流上半簇
+无中线：最大允许充电电流";
+CM_ SG_ 2449731488 Cell_MIN_Voltage_UP "最小电压上半簇";
+CM_ SG_ 2449731488 Cell_MAX_Voltage_UP "最大电压上半簇";
+CM_ SG_ 2449731488 Power_Voltage "P总电压";
+CM_ SG_ 2449731488 SOH "SOH";
+CM_ SG_ 2466443168 SOC_disp_DOWN "有中线：显示SOC下半簇
+无中线：NULL";
+CM_ SG_ 2449665952 Nres "负对地绝缘电阻";
+CM_ SG_ 2449665952 Pres "正对地绝缘电阻";
+CM_ SG_ 2449665952 SOC_disp_UP "有中线：显示SOC上半簇
+无中线：显示SOC";
+CM_ SG_ 2466377632 Power_Voltage_DOWN "有中线：P电压（下半簇）
+无中线：NULL";
+CM_ SG_ 2466377632 BatteryVoltage "有中线：B电压（上下半簇总压）
+无中线：NULL";
+CM_ SG_ 2466377632 Current_DOWN "有中线：下半簇电流
+无中线：NULL";
+CM_ SG_ 2466377632 BatteryVoltage_DOWN "有中线：B电压（下半簇）
+无中线：NULL";
+CM_ SG_ 2415919105 RunTime "运行时间";
+CM_ SG_ 2449600416 Power_Voltage_UP "有中线：P电压（上半簇）
+无中线：NULL";
+CM_ SG_ 2449600416 Battery_Run_State_DOWN "有中线 运行状态（上半簇）：0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 
+无中线：NULL";
+CM_ SG_ 2449600416 Battery_Run_State_UP "有中线：运行状态（上半簇）0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 
+无中线：运行状态 0、初始 1、自测 2、准备 3、预充 4、高压待机 5、放电 6、充电 7、放空 8、充满 9、错误 10、切断 ";
+CM_ SG_ 2449600416 Current_UP "有中线：上半簇电流、
+无中线：系统电流";
+CM_ SG_ 2449600416 BatteryVoltage_UP "有中线：B电压（上半簇）
+无中线：B电压";
+CM_ SG_ 2450321312 DI_STATUS "DI1输入状态";
+CM_ SG_ 2450321312 RELAY_STATUS "继电器1输出控制状态";
+CM_ SG_ 2450124704 Cell_MIN_Vlotage_NO_L "低字节：电池编号，1-32；
+";
+CM_ SG_ 2450124704 Cell_MIN_Vlotage_NO_H "高字节：从板编号，1-36；";
+CM_ SG_ 2450124704 Cell_MAX_Vlotage_NO_L "低字节：电池编号，1-32；
+";
+CM_ SG_ 2450124704 Cell_MAX_Vlotage_NO_H "高字节：从板编号，1-36；
+
+";
+BA_DEF_ BO_  "TpJ1939VarDlc" ENUM  "No","Yes";
+BA_DEF_ SG_  "SigType" ENUM  "Default","Range","RangeSigned","ASCII","Discrete","Control","ReferencePGN","DTC","StringDelimiter","StringLength","StringLengthControl","MessageCounter","MessageChecksum";
+BA_DEF_ SG_  "GenSigEVName" STRING ;
+BA_DEF_ SG_  "GenSigILSupport" ENUM  "No","Yes";
+BA_DEF_ SG_  "GenSigSendType" ENUM  "Cyclic","OnWrite","OnWriteWithRepetition","OnChange","OnChangeWithRepetition","IfActive","IfActiveWithRepetition","NoSigSendType";
+BA_DEF_ BO_  "GenMsgFastOnStart" INT 0 100000;
+BA_DEF_ SG_  "GenSigInactiveValue" INT 0 0;
+BA_DEF_ BO_  "GenMsgCycleTimeFast" INT 0 3600000;
+BA_DEF_ BO_  "GenMsgNrOfRepetition" INT 0 1000000;
+BA_DEF_ SG_  "GenSigStartValue" INT 0 2147483647;
+BA_DEF_ BO_  "GenMsgDelayTime" INT 0 1000;
+BA_DEF_ BO_  "GenMsgILSupport" ENUM  "No","Yes";
+BA_DEF_ BO_  "GenMsgStartDelayTime" INT 0 100000;
+BA_DEF_ BU_  "NodeLayerModules" STRING ;
+BA_DEF_ BU_  "ECU" STRING ;
+BA_DEF_ BU_  "NmJ1939SystemInstance" INT 0 15;
+BA_DEF_ BU_  "NmJ1939System" INT 0 127;
+BA_DEF_ BU_  "NmJ1939ManufacturerCode" INT 0 2047;
+BA_DEF_ BU_  "NmJ1939IndustryGroup" INT 0 7;
+BA_DEF_ BU_  "NmJ1939IdentityNumber" INT 0 2097151;
+BA_DEF_ BU_  "NmJ1939FunctionInstance" INT 0 7;
+BA_DEF_ BU_  "NmJ1939Function" INT 0 255;
+BA_DEF_ BU_  "NmJ1939ECUInstance" INT 0 3;
+BA_DEF_ BU_  "NmJ1939AAC" INT 0 1;
+BA_DEF_ BU_  "NmStationAddress" INT 0 255;
+BA_DEF_ BO_  "GenMsgSendType" ENUM  "cyclic","NotUsed","IfActive","NotUsed","NotUsed","NotUsed","NotUsed","NotUsed","noMsgSendType";
+BA_DEF_ BO_  "GenMsgRequestable" INT 0 1;
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 3600000;
+BA_DEF_ SG_  "SPN" INT 0 524287;
+BA_DEF_  "DBName" STRING ;
+BA_DEF_  "BusType" STRING ;
+BA_DEF_  "ProtocolType" STRING ;
+BA_DEF_ BO_  "VFrameFormat" ENUM  "StandardCAN","ExtendedCAN","reserved","J1939PG";
+BA_DEF_DEF_  "TpJ1939VarDlc" "No";
+BA_DEF_DEF_  "SigType" "Default";
+BA_DEF_DEF_  "GenSigEVName" "Env@Nodename_@Signame";
+BA_DEF_DEF_  "GenSigILSupport" "Yes";
+BA_DEF_DEF_  "GenSigSendType" "NoSigSendType";
+BA_DEF_DEF_  "GenMsgFastOnStart" 0;
+BA_DEF_DEF_  "GenSigInactiveValue" 0;
+BA_DEF_DEF_  "GenMsgCycleTimeFast" 0;
+BA_DEF_DEF_  "GenMsgNrOfRepetition" 0;
+BA_DEF_DEF_  "GenSigStartValue" 0;
+BA_DEF_DEF_  "GenMsgDelayTime" 0;
+BA_DEF_DEF_  "GenMsgILSupport" "Yes";
+BA_DEF_DEF_  "GenMsgStartDelayTime" 0;
+BA_DEF_DEF_  "NodeLayerModules" "";
+BA_DEF_DEF_  "ECU" "";
+BA_DEF_DEF_  "NmJ1939SystemInstance" 0;
+BA_DEF_DEF_  "NmJ1939System" 0;
+BA_DEF_DEF_  "NmJ1939ManufacturerCode" 0;
+BA_DEF_DEF_  "NmJ1939IndustryGroup" 0;
+BA_DEF_DEF_  "NmJ1939IdentityNumber" 0;
+BA_DEF_DEF_  "NmJ1939FunctionInstance" 0;
+BA_DEF_DEF_  "NmJ1939Function" 0;
+BA_DEF_DEF_  "NmJ1939ECUInstance" 0;
+BA_DEF_DEF_  "NmJ1939AAC" 0;
+BA_DEF_DEF_  "NmStationAddress" 254;
+BA_DEF_DEF_  "GenMsgSendType" "noMsgSendType";
+BA_DEF_DEF_  "GenMsgRequestable" 1;
+BA_DEF_DEF_  "GenMsgCycleTime" 0;
+BA_DEF_DEF_  "SPN" 0;
+BA_DEF_DEF_  "DBName" "";
+BA_DEF_DEF_  "BusType" "CAN";
+BA_DEF_DEF_  "ProtocolType" "J1939";
+BA_DEF_DEF_  "VFrameFormat" "J1939PG";
+BA_ "DBName" "_";
+BA_ "NmStationAddress" BU_ BCU 161;
+BA_ "VFrameFormat" BO_ 2466574240 3;
+BA_ "VFrameFormat" BO_ 2449797024 3;
+BA_ "VFrameFormat" BO_ 2449862560 3;
+BA_ "VFrameFormat" BO_ 2452221856 3;
+BA_ "VFrameFormat" BO_ 2449928096 3;
+BA_ "VFrameFormat" BO_ 2465333482 3;
+BA_ "VFrameFormat" BO_ 2452156320 3;
+BA_ "VFrameFormat" BO_ 2450255776 3;
+BA_ "VFrameFormat" BO_ 2450190240 3;
+BA_ "VFrameFormat" BO_ 2450059168 3;
+BA_ "VFrameFormat" BO_ 2466770848 3;
+BA_ "VFrameFormat" BO_ 2449993632 3;
+BA_ "VFrameFormat" BO_ 2449731488 3;
+BA_ "VFrameFormat" BO_ 2466443168 3;
+BA_ "VFrameFormat" BO_ 2449665952 3;
+BA_ "VFrameFormat" BO_ 2466377632 3;
+BA_ "VFrameFormat" BO_ 2415919105 3;
+BA_ "VFrameFormat" BO_ 2449600416 3;
+BA_ "VFrameFormat" BO_ 2450321312 3;
+BA_ "VFrameFormat" BO_ 2450124704 3;
+

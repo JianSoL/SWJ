@@ -13,8 +13,10 @@ CORE_PYTHON_FILES = [
     "session_logger.py",
     "application/__init__.py",
     "application/configuration.py",
+    "application/dbc_parser.py",
     "UI/Q14.py",
     "UI/T34.py",
+    "UI/T36.py",
     "scripts/can_smoke.py",
     "scripts/self_test.py",
 ]

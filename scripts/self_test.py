@@ -150,6 +150,21 @@ def test_module_cell_grid_module_extrema():
             app.quit()
 
 
+def test_dbc_parser():
+    from application.dbc_parser import parse_dbc_file
+
+    database = parse_dbc_file(PROJECT_DIR / "IDC.dbc")
+    _assert(len(database.messages) >= 20, "DBC parser should load messages")
+    _assert(database.signal_count >= 90, "DBC parser should load signals")
+    _assert(set(database.nodes) >= {"BAU", "BCU"}, "DBC parser should load nodes")
+    _assert(not database.parse_warnings, "IDC.dbc should parse without warnings")
+
+    message = next((item for item in database.messages if item.name == "BCU1204EFA0"), None)
+    _assert(message is not None, "DBC parser should expose BCU1204EFA0")
+    signal_names = {signal.name for signal in message.signals}
+    _assert("Chargeable_battery_KWH_UP" in signal_names, "DBC parser should expose message signals")
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -342,6 +357,9 @@ def test_main_window_offscreen_logging():
             ]
             _assert("实时告警" in tab_names, "active alarm tab is missing")
             _assert("实时监控" in tab_names, "realtime monitor tab is missing")
+            _assert("DBC解析" in tab_names, "DBC parser tab is missing")
+            _assert(window.S29.database is not None, "DBC parser page should load default IDC.dbc")
+            _assert(window.S29.database.signal_count >= 90, "DBC parser page should expose default DBC signals")
             _assert(window.S28.auto_refresh_checkbox.isChecked(), "active alarm auto refresh should be enabled by default")
             _assert(not window.send_time1.isActive(), "alarm parameter poll timer should stay stopped by default")
             window.can_ready = True
@@ -490,6 +508,7 @@ def main():
         test_configuration_round_trip,
         test_session_logger_files,
         test_module_cell_grid_module_extrema,
+        test_dbc_parser,
         test_main_window_offscreen_logging,
     ]
     failures = []

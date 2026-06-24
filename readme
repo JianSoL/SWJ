@@ -45,6 +45,7 @@ Copy-Item -LiteralPath config.json -Destination dist\config.json -Force
 - `conf.yaml`
 - `ControlCAN.dll`
 - `alarm.wav`
+- `IDC.dbc`
 - `UI\release_theme.qss`
 - `UI\style.qss`
 

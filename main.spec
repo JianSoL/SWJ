@@ -29,6 +29,7 @@ a = Analysis(
         ('UI/release_theme.qss', 'UI'),
         ('UI/style.qss', 'UI'),
         ('alarm.wav', '.'),
+        ('IDC.dbc', '.'),
     ],
     hiddenimports=[],
     hookspath=[],
