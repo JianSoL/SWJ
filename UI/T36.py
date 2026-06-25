@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import time
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -28,6 +29,9 @@ class DbcParsePage(QWidget):
         super().__init__()
         self.database = None
         self.default_dbc_path = self._default_dbc_path()
+        self.live_signal_rows = {}
+        self.live_frame_count = 0
+        self.live_matched_count = 0
         self._build_ui()
         if self.default_dbc_path is not None:
             self.file_path_edit.setText(str(self.default_dbc_path))
@@ -62,6 +66,14 @@ class DbcParsePage(QWidget):
         self.parse_button = QPushButton("重新解析", self)
         self.parse_button.clicked.connect(self.parse_current_file)
         toolbar.addWidget(self.parse_button)
+
+        self.live_decode_checkbox = QCheckBox("实时解析", self)
+        self.live_decode_checkbox.setChecked(True)
+        toolbar.addWidget(self.live_decode_checkbox)
+
+        self.clear_live_button = QPushButton("清空实时", self)
+        self.clear_live_button.clicked.connect(self.clear_live_values)
+        toolbar.addWidget(self.clear_live_button)
         root.addLayout(toolbar)
 
         summary_group = QGroupBox("解析概览", self)
@@ -116,6 +128,8 @@ class DbcParsePage(QWidget):
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
         root.addWidget(splitter, 1)
+
+        root.addWidget(self._build_live_group(), 1)
 
         self.status_label = QLabel("请选择DBC文件。", self)
         self.status_label.setObjectName("sectionHint")
@@ -172,6 +186,27 @@ class DbcParsePage(QWidget):
         layout.addWidget(self.signal_table)
         return group
 
+    def _build_live_group(self):
+        group = QGroupBox("实时解析结果", self)
+        layout = QVBoxLayout(group)
+        self.live_summary_label = QLabel("接收帧: 0 / 匹配帧: 0", group)
+        self.live_summary_label.setObjectName("sectionHint")
+        layout.addWidget(self.live_summary_label)
+
+        self.live_table = QTableWidget(group)
+        self.live_table.setColumnCount(10)
+        self.live_table.setHorizontalHeaderLabels(
+            ["时间", "ID", "报文", "信号", "原始值", "物理值", "单位", "枚举", "数据", "注释"]
+        )
+        self.live_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.live_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.live_table.verticalHeader().setVisible(False)
+        self.live_table.setAlternatingRowColors(True)
+        self.live_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.live_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.live_table)
+        return group
+
     def _default_dbc_path(self):
         candidates = []
         if getattr(sys, "frozen", False):
@@ -215,11 +250,13 @@ class DbcParsePage(QWidget):
         except Exception as exc:
             self.database = None
             self._clear_tables()
+            self.clear_live_values()
             self._update_summary()
             self.set_status(f"DBC解析失败: {exc}", failed=True)
             return
 
         self.populate_tables()
+        self.clear_live_values()
         self._update_summary()
         if show_success:
             self.set_status(f"DBC解析完成: {Path(path_text).name}")
@@ -291,6 +328,81 @@ class DbcParsePage(QWidget):
     def _clear_tables(self):
         self.message_table.setRowCount(0)
         self.signal_table.setRowCount(0)
+
+    def clear_live_values(self):
+        self.live_signal_rows = {}
+        self.live_frame_count = 0
+        self.live_matched_count = 0
+        if hasattr(self, "live_table"):
+            self.live_table.setRowCount(0)
+        self._update_live_summary()
+
+    def _update_live_summary(self):
+        if hasattr(self, "live_summary_label"):
+            self.live_summary_label.setText(
+                f"接收帧: {self.live_frame_count} / 匹配帧: {self.live_matched_count}"
+            )
+
+    def handle_can_frame(self, frame_id, data, timestamp=None):
+        if self.database is None or not self.live_decode_checkbox.isChecked():
+            return
+        self.live_frame_count += 1
+        decoded = self.database.decode_frame(frame_id, data)
+        if decoded is None:
+            self._update_live_summary()
+            return
+        self.live_matched_count += 1
+        time_text = self._format_timestamp(timestamp)
+        data_text = self._format_data_bytes(decoded.data)
+        for decoded_signal in decoded.signals:
+            self._upsert_live_signal_row(decoded, decoded_signal, time_text, data_text)
+        self._update_live_summary()
+
+    def _format_timestamp(self, timestamp):
+        if timestamp:
+            return str(timestamp)
+        return time.strftime("%H:%M:%S")
+
+    def _format_data_bytes(self, data):
+        return " ".join(f"{byte:02X}" for byte in bytes(data or b""))
+
+    def _format_physical_value(self, value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "" if value is None else str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.6f}".rstrip("0").rstrip(".")
+
+    def _upsert_live_signal_row(self, decoded, decoded_signal, time_text, data_text):
+        key = (decoded.message.wire_frame_id, decoded_signal.signal.name)
+        row = self.live_signal_rows.get(key)
+        if row is None:
+            row = self.live_table.rowCount()
+            self.live_table.insertRow(row)
+            self.live_signal_rows[key] = row
+
+        signal = decoded_signal.signal
+        values = [
+            time_text,
+            decoded.frame_id_hex,
+            decoded.message.name,
+            signal.name,
+            decoded_signal.raw_value,
+            self._format_physical_value(decoded_signal.physical_value),
+            signal.unit,
+            decoded_signal.choice,
+            data_text,
+            signal.comment,
+        ]
+        for column, value in enumerate(values):
+            item = self.live_table.item(row, column)
+            if item is None:
+                item = self._table_item(value)
+                self.live_table.setItem(row, column, item)
+            else:
+                item.setText("" if value is None else str(value))
 
     def _update_summary(self):
         if self.database is None:

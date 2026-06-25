@@ -37,6 +37,14 @@ class DbcSignal:
 
 
 @dataclass
+class DbcDecodedSignal:
+    signal: DbcSignal
+    raw_value: int
+    physical_value: float
+    choice: str = ""
+
+
+@dataclass
 class DbcMessage:
     frame_id: int
     name: str
@@ -49,6 +57,22 @@ class DbcMessage:
     def frame_id_hex(self):
         return f"0x{self.frame_id:X}"
 
+    @property
+    def wire_frame_id(self):
+        return normalize_dbc_frame_id(self.frame_id)
+
+
+@dataclass
+class DbcDecodedFrame:
+    frame_id: int
+    data: bytes
+    message: DbcMessage
+    signals: list
+
+    @property
+    def frame_id_hex(self):
+        return f"0x{int(self.frame_id):X}"
+
 
 @dataclass
 class DbcDatabase:
@@ -57,15 +81,105 @@ class DbcDatabase:
     nodes: list
     messages: list
     parse_warnings: list = field(default_factory=list)
+    _message_lookup: dict = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self):
+        self._message_lookup = {}
+        for message in self.messages:
+            self._message_lookup[int(message.frame_id)] = message
+            self._message_lookup[int(message.wire_frame_id)] = message
 
     @property
     def signal_count(self):
         return sum(len(message.signals) for message in self.messages)
 
+    def message_for_frame_id(self, frame_id):
+        frame_id = int(frame_id)
+        return (
+            self._message_lookup.get(frame_id)
+            or self._message_lookup.get(normalize_dbc_frame_id(frame_id))
+            or self._message_lookup.get(frame_id | 0x80000000)
+        )
+
+    def decode_frame(self, frame_id, data):
+        message = self.message_for_frame_id(frame_id)
+        if message is None:
+            return None
+        payload = bytes(data or b"")
+        decoded_signals = []
+        for signal in message.signals:
+            if signal.length <= 0:
+                continue
+            try:
+                raw_value = extract_signal_raw_value(payload, signal)
+            except ValueError:
+                continue
+            physical_value = raw_value * signal.factor + signal.offset
+            decoded_signals.append(
+                DbcDecodedSignal(
+                    signal=signal,
+                    raw_value=raw_value,
+                    physical_value=physical_value,
+                    choice=signal.choices.get(raw_value, ""),
+                )
+            )
+        return DbcDecodedFrame(
+            frame_id=int(frame_id),
+            data=payload,
+            message=message,
+            signals=decoded_signals,
+        )
+
 
 def parse_number(text):
     value = float(str(text).strip())
     return int(value) if value.is_integer() else value
+
+
+def normalize_dbc_frame_id(frame_id):
+    frame_id = int(frame_id)
+    if frame_id & 0x80000000:
+        return frame_id & 0x1FFFFFFF
+    return frame_id
+
+
+def _payload_bit(payload, bit_index):
+    byte_index = bit_index // 8
+    if byte_index < 0 or byte_index >= len(payload):
+        raise ValueError("signal exceeds payload length")
+    return (payload[byte_index] >> (bit_index % 8)) & 0x01
+
+
+def _motorola_signal_positions(start_bit, length):
+    positions = []
+    position = int(start_bit)
+    for _index in range(int(length)):
+        positions.append(position)
+        if position % 8 == 0:
+            position += 15
+        else:
+            position -= 1
+    return positions
+
+
+def extract_signal_raw_value(payload, signal):
+    payload = bytes(payload or b"")
+    length = int(signal.length)
+    if length <= 0:
+        return 0
+
+    if signal.byte_order == "Intel":
+        raw_payload = int.from_bytes(payload, byteorder="little", signed=False)
+        mask = (1 << length) - 1
+        raw_value = (raw_payload >> int(signal.start_bit)) & mask
+    else:
+        raw_value = 0
+        for bit_index in _motorola_signal_positions(signal.start_bit, length):
+            raw_value = (raw_value << 1) | _payload_bit(payload, bit_index)
+
+    if signal.is_signed and raw_value & (1 << (length - 1)):
+        raw_value -= 1 << length
+    return raw_value
 
 
 def _read_dbc_text(path):

@@ -163,6 +163,17 @@ def test_dbc_parser():
     _assert(message is not None, "DBC parser should expose BCU1204EFA0")
     signal_names = {signal.name for signal in message.signals}
     _assert("Chargeable_battery_KWH_UP" in signal_names, "DBC parser should expose message signals")
+    decoded = database.decode_frame(
+        0x1204EFA0,
+        bytes([0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B, 0xA0, 0x0F]),
+    )
+    _assert(decoded is not None, "DBC parser should match live CAN frame id")
+    decoded_values = {
+        signal.signal.name: signal.physical_value
+        for signal in decoded.signals
+    }
+    _assert(decoded_values["Chargeable_battery_KWH_UP"] == 10, "DBC live decode value mismatch")
+    _assert(decoded_values["Current_Discharging_KWH_UP"] == 40, "DBC live decode high word mismatch")
 
 
 def test_main_window_offscreen_logging():
@@ -360,6 +371,19 @@ def test_main_window_offscreen_logging():
             _assert("DBC解析" in tab_names, "DBC parser tab is missing")
             _assert(window.S29.database is not None, "DBC parser page should load default IDC.dbc")
             _assert(window.S29.database.signal_count >= 90, "DBC parser page should expose default DBC signals")
+            window.S29.clear_live_values()
+            window._handle_dbc_received_frame(
+                0x1204EFA0,
+                bytes([0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B, 0xA0, 0x0F]),
+                timestamp=123,
+            )
+            _assert(window.S29.live_matched_count == 1, "DBC live decode should match received frame")
+            live_values = {}
+            for row in range(window.S29.live_table.rowCount()):
+                signal_name = window.S29.live_table.item(row, 3).text()
+                physical_value = window.S29.live_table.item(row, 5).text()
+                live_values[signal_name] = physical_value
+            _assert(live_values.get("Chargeable_battery_KWH_UP") == "10", "DBC live table value mismatch")
             _assert(window.S28.auto_refresh_checkbox.isChecked(), "active alarm auto refresh should be enabled by default")
             _assert(not window.send_time1.isActive(), "alarm parameter poll timer should stay stopped by default")
             window.can_ready = True

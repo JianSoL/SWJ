@@ -2887,6 +2887,18 @@ class Edit(Ui_Form, QWidget):
         #self.lineEdit.setText(str(t))
 
 
+    def _handle_dbc_received_frame(self, frame_id, data, timestamp=None):
+        page = getattr(self, "S29", None)
+        if page is None:
+            return
+        try:
+            page.handle_can_frame(frame_id, data, timestamp=timestamp)
+        except Exception as exc:
+            if not getattr(self, "_dbc_decode_error_reported", False):
+                self._dbc_decode_error_reported = True
+                print(f"DBC realtime decode failed: {exc}")
+
+
     def CANCommunication(self):
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
             return
@@ -2906,16 +2918,19 @@ class Edit(Ui_Form, QWidget):
             #pass
             ID = "NONE"
             try:
-                ID = hex(self.c.ReceiveBuffer[i].ID)  # 输出当前帧的ID
+                frame_obj = self.c.ReceiveBuffer[i]
+                ID = hex(frame_obj.ID)  # 输出当前帧的ID
+                frame_data = bytes(frame_obj.Data[: frame_obj.DataLen])
+                self._handle_dbc_received_frame(int(frame_obj.ID), frame_data, int(frame_obj.TimeStamp))
 
-                byte0 = self.c.ReceiveBuffer[i].Data[0]
-                byte1 = self.c.ReceiveBuffer[i].Data[1]
-                byte2 = self.c.ReceiveBuffer[i].Data[2]
-                byte3 = self.c.ReceiveBuffer[i].Data[3]
-                byte4 = self.c.ReceiveBuffer[i].Data[4]
-                byte5 = self.c.ReceiveBuffer[i].Data[5]
-                byte6 = self.c.ReceiveBuffer[i].Data[6]
-                byte7 = self.c.ReceiveBuffer[i].Data[7]
+                byte0 = frame_obj.Data[0]
+                byte1 = frame_obj.Data[1]
+                byte2 = frame_obj.Data[2]
+                byte3 = frame_obj.Data[3]
+                byte4 = frame_obj.Data[4]
+                byte5 = frame_obj.Data[5]
+                byte6 = frame_obj.Data[6]
+                byte7 = frame_obj.Data[7]
             except:
                 pass
 
