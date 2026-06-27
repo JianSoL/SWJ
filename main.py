@@ -54,6 +54,7 @@ CAN_LOWER_SILENCE_TIMEOUT_S = 3.0
 CAN_SILENT_DIAG_TIMEOUT_S = 0.35
 REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 200
 CELL_PAGE_REFRESH_INTERVAL_S = 0.2
+SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.25
 
 CTRL_WORK_MODE = 0x01
 CTRL_CHNNEL = 0x02
@@ -86,6 +87,7 @@ VAR_SYS_MINT_POSI = 338
 VAR_SYS_USER_SET_SOC = 445
 VAR_HALL_CURR = 818
 VAR_SHUNT_CURR = 819
+SYSTEM_KLINE_SHARED_SIGNAL_IDS = (VAR_SYS_VOLT, VAR_SYS_CURR)
 ID_PAR_SYS_START = 0x90400
 PAR_SYS_MODULE_COUNT = ID_PAR_SYS_START + 1
 PAR_SYS_AFE_COUNT = ID_PAR_SYS_START + 2
@@ -155,8 +157,6 @@ REALTIME_MONITOR_SIGNAL_IDS = tuple(dict.fromkeys(
     [definition["data_id"] for definition in REALTIME_MONITOR_SIGNAL_DEFINITIONS]
     + [
         VAR_SYS_RUN_STATUS,
-        VAR_SYS_VOLT,
-        VAR_SYS_CURR,
         VAR_SYS_SOC,
         VAR_SYS_SOH,
         VAR_SYS_DIS_SOC,
@@ -732,6 +732,7 @@ class Edit(Ui_Form, QWidget):
             "BCUSignalQ_DXYC_index",
             "realtime_monitor_query_index",
             "system_kline_query_index",
+            "system_kline_last_request_monotonic",
             "current_COUNT",
         ):
             if hasattr(self, attr_name):
@@ -2880,6 +2881,11 @@ class Edit(Ui_Form, QWidget):
 
 
         self.BCUSignalQ = BCUSignalQ
+        self.cluster_page_signal_ids = tuple(
+            data_id
+            for data_id in self.BCUSignalQ
+            if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
+        )
         self.BCUSignalQ_index = 0
 
         self.BAUSignalQ = BAUSignalQ
@@ -2895,6 +2901,7 @@ class Edit(Ui_Form, QWidget):
             self.realtime_monitor_definitions_by_id.setdefault(data_id, []).append(definition)
         self.realtime_monitor_query_index = 0
         self.system_kline_query_index = 0
+        self.system_kline_last_request_monotonic = 0.0
         self.realtime_monitor_raw_words = {
             cluster_index: {}
             for cluster_index, _address in getattr(self, "cluster_options", [])
@@ -4683,7 +4690,11 @@ class Edit(Ui_Form, QWidget):
         cluster_index = targets[cluster_cursor]
         data_id = self.BCUSignalQ[signal_cursor]
         data = [data_id & 0xFF, (data_id >> 8) & 0xFF, (data_id >> 16) & 0xFF, (data_id >> 24) & 0xFF, 0, 0, 0, 0]
-        self.QueryData(cluster_index, data)
+        if not (
+            cluster_index == self._active_cluster_index()
+            and data_id in SYSTEM_KLINE_SHARED_SIGNAL_IDS
+        ):
+            self.QueryData(cluster_index, data)
 
         cluster_cursor += 1
         if cluster_cursor >= len(targets):
@@ -4693,10 +4704,28 @@ class Edit(Ui_Form, QWidget):
         self.log_poll_signal_index = signal_cursor
 
 
+    def _request_system_kline_background(self):
+        cluster_index = self._active_cluster_index()
+        if cluster_index <= 0:
+            return
+        now = time.monotonic()
+        last_request = float(getattr(self, "system_kline_last_request_monotonic", 0.0))
+        if last_request and now - last_request < SYSTEM_KLINE_BACKGROUND_INTERVAL_S:
+            return
+        signal_ids = SYSTEM_KLINE_SHARED_SIGNAL_IDS
+        cursor = int(getattr(self, "system_kline_query_index", 0)) % len(signal_ids)
+        data_id = signal_ids[cursor]
+        data = [data_id & 0xFF, (data_id >> 8) & 0xFF, 0, 0, 0, 0, 0, 0]
+        self.QueryData(cluster_index, data)
+        self.system_kline_query_index = (cursor + 1) % len(signal_ids)
+        self.system_kline_last_request_monotonic = now
+
+
     def RequestBCUVAR(self):
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
             return
         self._update_can_link_health()
+        self._request_system_kline_background()
         self._request_all_cluster_log_runtime_data()
 
         if self.table_index == self._realtime_monitor_tab_index():
@@ -4710,25 +4739,16 @@ class Edit(Ui_Form, QWidget):
                     self.realtime_monitor_query_index = (self.realtime_monitor_query_index + 1) % len(signal_ids)
             return
 
-        if self.table_index == self._system_kline_tab_index():
-            index = self._active_cluster_index()
-            signal_ids = (VAR_SYS_VOLT, VAR_SYS_CURR)
-            if index > 0:
-                data_id = signal_ids[self.system_kline_query_index]
-                data = [data_id & 0xFF, (data_id >> 8) & 0xFF, 0, 0, 0, 0, 0, 0]
-                self.QueryData(index, data)
-                self.system_kline_query_index = (self.system_kline_query_index + 1) % len(signal_ids)
-            return
-
         if self.table_index == self.CLUSTER_TAB_INDEX:
             index = self._active_cluster_index()
-            for i in range(CAN_REQUEST_BURST_PER_TICK):
+            signal_ids = getattr(self, "cluster_page_signal_ids", ())
+            for i in range(CAN_REQUEST_BURST_PER_TICK if signal_ids else 0):
                 #请求剩余充电时间上半簇
 
-                data = self.BCUSignalQ[self.BCUSignalQ_index]
+                data = signal_ids[self.BCUSignalQ_index]
                 data = [data&0xFF, (data>>8)&0xFF,  (data>>16)&0xFF,  (data>>24)&0xFF, 0, 0, 0, 0]
                 self.QueryData(index,data)
-                self.BCUSignalQ_index = (self.BCUSignalQ_index+1)%len(self.BCUSignalQ)
+                self.BCUSignalQ_index = (self.BCUSignalQ_index+1)%len(signal_ids)
 
 
         if self.table_index == self._balance_tab_index():

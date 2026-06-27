@@ -73,7 +73,7 @@ The implementation carries over the reference's K-line geometry while using BMS 
 - Data fidelity: voltage index 13 is scaled to 0.1 V; current index 14 is decoded as signed 16-bit and scaled to 0.1 A.
 - Isolation: raw samples and aggregated bars are stored per cluster. Selecting 00 displays an empty state without deleting compiled-cluster history.
 - Controls: 1/5/10/30/60-second periods, 60/120/240-bar windows, pause-with-background-capture, current-cluster clear, pan, zoom, reset, and image export.
-- Refresh behavior: successful index responses feed the chart directly; failed responses are ignored; canvas redraw is throttled to 320 ms.
+- Refresh behavior: total voltage and current are shared signals polled and cached in the background on every application page. They are removed from page-specific monitor and cluster queues to prevent duplicate requests; all-cluster logging only supplements non-active clusters. Successful responses feed the per-cluster history directly, failed responses are ignored, and visible-canvas redraw is throttled to 320 ms without restarting an active redraw deadline.
 - Layout: native Qt controls stay on one compact row while the chart consumes remaining height. No overlap was found at the tested laptop and desktop sizes.
 
 No actionable P0, P1, or P2 K-line findings remain.

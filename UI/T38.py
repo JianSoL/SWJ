@@ -418,6 +418,7 @@ class SystemKLinePage(QWidget):
             cluster_index == self.current_cluster_index
             and not self.pause_checkbox.isChecked()
             and self.isVisible()
+            and not self.redraw_timer.isActive()
         ):
             self.redraw_timer.start()
         return True

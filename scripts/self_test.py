@@ -260,6 +260,22 @@ def test_system_kline_page():
         _assert(page.chart_tabs.width() > 1000, "K-line chart should fill laptop width")
         _assert(len(page.panels["voltage"].canvas.bars) == 2, "voltage candles were not rendered")
 
+        stream_bucket = bucket_start + 10
+        for sample_index in range(9):
+            page.add_sample(
+                1,
+                "voltage",
+                604.0 + sample_index * 0.1,
+                stream_bucket + sample_index * 0.05,
+            )
+            app.processEvents()
+            time.sleep(0.05)
+        app.processEvents()
+        _assert(
+            len(page.panels["voltage"].canvas.bars) == 3,
+            "continuous samples should not postpone the scheduled chart redraw",
+        )
+
         page.resize(1920, 1080)
         page.chart_tabs.setCurrentIndex(1)
         page.refresh_active_chart(force=True)
@@ -275,7 +291,10 @@ def test_system_kline_page():
         page.pause_checkbox.setChecked(False)
         page.set_cluster_context(0, "00")
         _assert(not page.panels["current"].canvas.bars, "00 cluster should show an empty K-line chart")
-        _assert(page.sample_count(1, "voltage") == len(samples), "00 selection should preserve compiled cluster history")
+        _assert(
+            page.sample_count(1, "voltage") == len(samples) + 9,
+            "00 selection should preserve compiled cluster history",
+        )
     finally:
         page.close()
         if created_app:
@@ -441,6 +460,7 @@ def test_main_window_offscreen_logging():
         original_signal_ids = tuple(window.realtime_monitor_signal_ids)
         original_query_index = window.realtime_monitor_query_index
         original_kline_query_index = window.system_kline_query_index
+        original_kline_request_time = window.system_kline_last_request_monotonic
         original_query_data = window.QueryData
         try:
             window.c = SimpleNamespace()
@@ -450,6 +470,7 @@ def test_main_window_offscreen_logging():
             window.table_index = window._realtime_monitor_tab_index()
             window.realtime_monitor_signal_ids = (101, 102, 103, 104)
             window.realtime_monitor_query_index = 0
+            window.system_kline_last_request_monotonic = time.monotonic()
             sent_monitor_queries = []
             window.QueryData = lambda cluster_index, data: sent_monitor_queries.append((cluster_index, list(data)))
             window.RequestBCUVAR()
@@ -461,21 +482,36 @@ def test_main_window_offscreen_logging():
                 window.realtime_monitor_query_index == main_module.CAN_REQUEST_BURST_PER_TICK,
                 "realtime monitor query cursor should advance by request burst",
             )
-            window.table_index = window._system_kline_tab_index()
+            window.table_index = window._history_log_tab_index()
             window.system_kline_query_index = 0
+            window.system_kline_last_request_monotonic = 0.0
             sent_monitor_queries.clear()
             window.RequestBCUVAR()
+            window.system_kline_last_request_monotonic = 0.0
             window.RequestBCUVAR()
             requested_kline_ids = [query[1][0] | (query[1][1] << 8) for query in sent_monitor_queries]
             _assert(
                 requested_kline_ids == [main_module.VAR_SYS_VOLT, main_module.VAR_SYS_CURR],
-                "K-line page should alternate total-voltage and current index requests",
+                "background polling should cache voltage/current outside the K-line page",
+            )
+            _assert(
+                not set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS).intersection(
+                    main_module.REALTIME_MONITOR_SIGNAL_IDS
+                ),
+                "realtime page queue should not duplicate shared trend requests",
+            )
+            _assert(
+                not set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS).intersection(
+                    window.cluster_page_signal_ids
+                ),
+                "cluster page queue should not duplicate shared trend requests",
             )
         finally:
             window.QueryData = original_query_data
             window.realtime_monitor_signal_ids = original_signal_ids
             window.realtime_monitor_query_index = original_query_index
             window.system_kline_query_index = original_kline_query_index
+            window.system_kline_last_request_monotonic = original_kline_request_time
             window.table_index = original_table_index
             window.can_ready = original_can_ready
             window.c = original_c
