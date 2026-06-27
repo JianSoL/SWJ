@@ -8,7 +8,16 @@
 
 
 from PyQt6 import QtCore, QtGui, QtWidgets
-from PyQt6.QtWidgets import QWidget, QApplication,QTableWidgetItem,QVBoxLayout,QSpacerItem,QSizePolicy,QHBoxLayout
+from PyQt6.QtWidgets import (
+    QWidget,
+    QApplication,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QSpacerItem,
+    QSizePolicy,
+    QHBoxLayout,
+    QSplitter,
+)
 import sys
 from PyQt6.QtCore import Qt
 from .T24 import HostControlPage as UI24
@@ -25,6 +34,7 @@ from .T34 import RealtimeMonitorPage as UI34
 from .T35 import ActiveAlarmPage as UI35
 from .T36 import DbcParsePage as UI36
 from .conf import config
+from .responsive import FlowLayout
 
 CU_NUM = config["BCU_NUM"]+2
 
@@ -32,9 +42,9 @@ CU_NUM = config["BCU_NUM"]+2
 class Ui_Form(object):
     def setupUi(self, Form):
         Form.setObjectName("Form")
-        Form.resize(1400, 1000)
+        available = QApplication.primaryScreen().availableGeometry()
+        Form.resize(min(1600, available.width()), min(1000, available.height()))
         self.tabWidget = QtWidgets.QTabWidget(parent=Form)
-        self.tabWidget.setGeometry(QtCore.QRect(0, 0, 1920, 1000))
         self.tabWidget.setObjectName("tabWidget")
         #self.tabWidget.setTextAlignment(Qt.AlignCenter)  # 设置内容居中
 
@@ -128,13 +138,16 @@ class Ui_Form(object):
 
         self.product_command_bar = QtWidgets.QFrame(parent=self.product_header)
         self.product_command_bar.setObjectName("productCommandBar")
-        self.product_command_layout = QHBoxLayout(self.product_command_bar)
-        self.product_command_layout.setContentsMargins(0, 0, 0, 0)
-        self.product_command_layout.setSpacing(8)
+        self.product_command_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.product_command_layout = FlowLayout(
+            self.product_command_bar,
+            margin=0,
+            horizontal_spacing=8,
+            vertical_spacing=8,
+        )
 
         self.product_header_layout.addWidget(self.product_brand_block, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.product_header_layout.addStretch(1)
-        self.product_header_layout.addWidget(self.product_command_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.product_header_layout.addWidget(self.product_command_bar, 1, Qt.AlignmentFlag.AlignVCenter)
 
         # 创建水平和垂直布局
         v_layout = QVBoxLayout()
@@ -226,20 +239,48 @@ class Ui_Form(object):
 
 
 
+        self.cluster_section_groups = []
+        self.cluster_section_splitters = []
         for i in range(0,CU_NUM):
             #self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[i]),"簇"+str(i))
-
-
+            tab_layout = QVBoxLayout(self.tab[i])
+            tab_layout.setContentsMargins(12, 12, 12, 12)
+            tab_layout.setSpacing(8)
+            splitter = QSplitter(Qt.Orientation.Horizontal, self.tab[i])
+            splitter.setChildrenCollapsible(False)
+            splitter.setHandleWidth(8)
+            tab_layout.addWidget(splitter)
+            section_groups = []
 
             for j in range(0,3):
-                self.TW[i][j].setGeometry(QtCore.QRect(j*600, 50, 800, 1000))
+                group = QtWidgets.QGroupBox(self.tab[i])
+                group_layout = QVBoxLayout(group)
+                group_layout.setContentsMargins(8, 12, 8, 8)
+                group_layout.setSpacing(6)
+
                 self.TW[i][j].setObjectName("tableWidget")
-                self.TW[i][j].horizontalHeader().setDefaultSectionSize(180)
                 self.TW[i][j].setColumnCount(3)
                 self.TW[i][j].setRowCount(100)
                 self.TW[i][j].setHorizontalHeaderLabels(["信号","值","单位"])
+                self.TW[i][j].setMinimumSize(0, 0)
+                self.TW[i][j].horizontalHeader().setSectionResizeMode(
+                    0, QtWidgets.QHeaderView.ResizeMode.Stretch
+                )
+                self.TW[i][j].horizontalHeader().setSectionResizeMode(
+                    1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+                )
+                self.TW[i][j].horizontalHeader().setSectionResizeMode(
+                    2, QtWidgets.QHeaderView.ResizeMode.Stretch
+                )
 
-                self.label[i][j].setGeometry(QtCore.QRect(300+j*600, 30, 81, 16))
+                self.label[i][j].setObjectName("sectionTitle")
+                self.label[i][j].setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.label[i][j].setWordWrap(True)
+                group_layout.addWidget(self.label[i][j])
+                group_layout.addWidget(self.TW[i][j], 1)
+                splitter.addWidget(group)
+                splitter.setStretchFactor(j, 1)
+                section_groups.append(group)
                 if i<CU_NUM-1:
                     if(j==0):
                         if config["Has_N"]==1:
@@ -256,6 +297,8 @@ class Ui_Form(object):
                             self.label[i][j].setText("整簇信息")
                         else:
                             self.label[i][j].setText("整簇信息(无中线)")
+            self.cluster_section_groups.append(section_groups)
+            self.cluster_section_splitters.append(splitter)
 
         self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
 

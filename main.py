@@ -355,6 +355,7 @@ class Edit(Ui_Form, QWidget):
     def _add_command_caption(self, text):
         label = QLabel(text, self.product_command_bar)
         label.setObjectName("fieldCaption")
+        label.setProperty("flowKeepNext", True)
         self.product_command_layout.addWidget(label)
         return label
 
@@ -5943,6 +5944,6 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     myshow = Edit()
 
-    myshow.show()
+    myshow.showMaximized()
     sys.exit(app.exec())
     #self.S21.change_row_color(2, QColor(255, 255, 0))

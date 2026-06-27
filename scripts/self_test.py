@@ -199,6 +199,53 @@ def test_main_window_offscreen_logging():
             window.cluster_selector.currentData() > 0,
             "default cluster selector should still choose the first compiled cluster",
         )
+
+        window.show()
+        for width, height in ((1024, 640), (1280, 720), (1366, 768), (1440, 900), (1920, 1080)):
+            window.resize(width, height)
+            for _ in range(3):
+                app.processEvents()
+
+            visible_controls = []
+            for item_index in range(window.product_command_layout.count()):
+                item = window.product_command_layout.itemAt(item_index)
+                widget = item.widget() if item is not None else None
+                if widget is not None and widget.isVisible():
+                    visible_controls.append(widget)
+                    _assert(
+                        window.product_command_bar.rect().contains(widget.geometry()),
+                        f"header control escaped command area at {width}x{height}",
+                    )
+            for left_index, left_widget in enumerate(visible_controls):
+                for right_widget in visible_controls[left_index + 1:]:
+                    _assert(
+                        not left_widget.geometry().intersects(right_widget.geometry()),
+                        f"header controls overlap at {width}x{height}",
+                    )
+
+            window.tabWidget.setCurrentIndex(window.CLUSTER_TAB_INDEX)
+            for _ in range(2):
+                app.processEvents()
+            cluster_groups = window.cluster_section_groups[window.CLUSTER_TAB_INDEX]
+            _assert(all(group.width() > 0 for group in cluster_groups), "cluster overview section collapsed")
+            for left_group, right_group in zip(cluster_groups, cluster_groups[1:]):
+                _assert(
+                    not left_group.geometry().intersects(right_group.geometry()),
+                    f"cluster overview sections overlap at {width}x{height}",
+                )
+
+            window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
+            for _ in range(3):
+                app.processEvents()
+            viewport_width = window.S27.content_scroll.viewport().width()
+            expected_columns = 3 if viewport_width >= 1680 else 2 if viewport_width >= 1120 else 1
+            _assert(
+                window.S27.layout_column_count == expected_columns,
+                f"realtime monitor responsive columns mismatch at {width}x{height}",
+            )
+            _assert(window.S17.body_scroll.widgetResizable(), "host control page should remain scrollable")
+        window.hide()
+
         original_log_interval = main_module.config.get(
             main_module.LOG_INTERVAL_CONFIG_KEY,
             main_module.LOG_INTERVAL_DEFAULT_MS,

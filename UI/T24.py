@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -79,13 +80,20 @@ class HostControlPage(QWidget):
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
-        body = QHBoxLayout()
+        self.body_scroll = QScrollArea(self)
+        self.body_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.body_scroll.setWidgetResizable(True)
+        root.addWidget(self.body_scroll, 1)
+
+        body_content = QWidget(self.body_scroll)
+        body = QHBoxLayout(body_content)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(12)
-        root.addLayout(body, stretch=1)
 
         body.addWidget(self._build_index_group(), stretch=4)
         body.addWidget(self._build_output_group(), stretch=3)
         body.addWidget(self._build_parameter_group(), stretch=4)
+        self.body_scroll.setWidget(body_content)
 
     def _build_index_group(self):
         group = QGroupBox("请求索引读写", self)

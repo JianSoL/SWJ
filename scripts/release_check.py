@@ -15,6 +15,8 @@ CORE_PYTHON_FILES = [
     "application/configuration.py",
     "application/dbc_parser.py",
     "UI/Q14.py",
+    "UI/responsive.py",
+    "UI/T24.py",
     "UI/T34.py",
     "UI/T36.py",
     "scripts/can_smoke.py",

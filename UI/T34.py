@@ -1,6 +1,6 @@
 import math
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -75,7 +76,7 @@ class StateDot(QFrame):
         self._label_text = str(label_text)
         self.setObjectName("stateBadge")
         self.setMinimumHeight(34)
-        self.setMinimumWidth(104)
+        self.setMinimumWidth(78)
         self.setToolTip(self._label_text)
 
         layout = QHBoxLayout(self)
@@ -167,20 +168,64 @@ class RealtimeMonitorPage(QWidget):
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-        root.addLayout(grid, stretch=1)
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll.setWidgetResizable(True)
+        root.addWidget(self.content_scroll, 1)
 
-        grid.addWidget(self._build_system_group(), 0, 0)
-        grid.addWidget(self._build_state_group(), 0, 1)
-        grid.addWidget(self._build_soc_group(), 0, 2)
-        grid.addWidget(self._build_extrema_group(), 1, 0)
-        grid.addWidget(self._build_statistics_group(), 1, 1)
-        grid.addWidget(self._build_temperature_group(), 1, 2)
+        self.content_widget = QWidget(self.content_scroll)
+        self.content_grid = QGridLayout(self.content_widget)
+        self.content_grid.setContentsMargins(0, 0, 4, 0)
+        self.content_grid.setHorizontalSpacing(12)
+        self.content_grid.setVerticalSpacing(12)
+        self.content_scroll.setWidget(self.content_widget)
+        self.content_scroll.viewport().installEventFilter(self)
+
+        self.content_groups = [
+            self._build_system_group(),
+            self._build_state_group(),
+            self._build_soc_group(),
+            self._build_extrema_group(),
+            self._build_statistics_group(),
+            self._build_temperature_group(),
+        ]
+        self.layout_column_count = 0
+        self._relayout_content(3)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = self.content_scroll.viewport().width() if hasattr(self, "content_scroll") else self.width()
+        self._update_responsive_columns(width)
+
+    def eventFilter(self, watched, event):
+        if (
+            hasattr(self, "content_scroll")
+            and watched is self.content_scroll.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._update_responsive_columns(event.size().width())
+        return super().eventFilter(watched, event)
+
+    def _update_responsive_columns(self, width):
+        if width >= 1680:
+            column_count = 3
+        elif width >= 1120:
+            column_count = 2
+        else:
+            column_count = 1
+        self._relayout_content(column_count)
+
+    def _relayout_content(self, column_count):
+        column_count = max(1, min(int(column_count), 3))
+        if column_count == self.layout_column_count:
+            return
+        while self.content_grid.count():
+            self.content_grid.takeAt(0)
+        for column in range(3):
+            self.content_grid.setColumnStretch(column, 1 if column < column_count else 0)
+        for index, group in enumerate(self.content_groups):
+            self.content_grid.addWidget(group, index // column_count, index % column_count)
+        self.layout_column_count = column_count
 
     def _metric_label(self, text, parent, width=108):
         label = QLabel(str(text), parent)
