@@ -14,6 +14,7 @@ CORE_PYTHON_FILES = [
     "application/__init__.py",
     "application/configuration.py",
     "application/dbc_parser.py",
+    "application/trend_store.py",
     "UI/Q14.py",
     "UI/responsive.py",
     "UI/T24.py",
@@ -22,6 +23,7 @@ CORE_PYTHON_FILES = [
     "UI/T37.py",
     "UI/T38.py",
     "scripts/can_smoke.py",
+    "scripts/performance_check.py",
     "scripts/self_test.py",
 ]
 
@@ -53,6 +55,11 @@ def main():
     run_step(
         "self_test",
         [sys.executable, "scripts/self_test.py"],
+        env=env,
+    )
+    run_step(
+        "performance_check",
+        [sys.executable, "scripts/performance_check.py"],
         env=env,
     )
     print("RELEASE_CHECK_OK")

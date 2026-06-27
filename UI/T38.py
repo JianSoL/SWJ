@@ -1,14 +1,12 @@
 import math
 import time
-from collections import defaultdict, deque
-from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
 from matplotlib import rcParams
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -22,49 +20,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from application.trend_store import TrendDataStore, aggregate_period_statistics
+
 
 rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 rcParams["axes.unicode_minus"] = False
-
-
-@dataclass(frozen=True)
-class KLineBar:
-    bucket_start: float
-    first: float
-    maximum: float
-    minimum: float
-    latest: float
-    sample_count: int
-
-
-def aggregate_period_statistics(samples, period_seconds, max_bars=None):
-    period_seconds = max(1, int(period_seconds))
-    buckets = {}
-    for timestamp, value in sorted(samples or (), key=lambda item: item[0]):
-        try:
-            timestamp = float(timestamp)
-            value = float(value)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(timestamp) or not math.isfinite(value):
-            continue
-        bucket_start = math.floor(timestamp / period_seconds) * period_seconds
-        current = buckets.get(bucket_start)
-        if current is None:
-            buckets[bucket_start] = [value, value, value, value, 1]
-        else:
-            current[1] = max(current[1], value)
-            current[2] = min(current[2], value)
-            current[3] = value
-            current[4] += 1
-
-    bars = [
-        KLineBar(bucket, values[0], values[1], values[2], values[3], values[4])
-        for bucket, values in sorted(buckets.items())
-    ]
-    if max_bars is not None:
-        bars = bars[-max(1, int(max_bars)):]
-    return bars
 
 
 class KLineCanvas(FigureCanvasQTAgg):
@@ -86,15 +46,20 @@ class KLineCanvas(FigureCanvasQTAgg):
         self.count_axes = None
         self.annotation = None
         self.mpl_connect("motion_notify_event", self._on_mouse_move)
+        self._create_axes()
         self.draw_bars([])
 
-    def draw_bars(self, bars):
-        self.bars = list(bars or [])
-        self.figure.clear()
+    def _create_axes(self):
         grid = self.figure.add_gridspec(5, 1, hspace=0.06)
         self.main_axes = self.figure.add_subplot(grid[:4, 0])
         self.count_axes = self.figure.add_subplot(grid[4, 0], sharex=self.main_axes)
         self.figure.subplots_adjust(left=0.07, right=0.985, bottom=0.11, top=0.96)
+
+    def draw_bars(self, bars):
+        self.bars = list(bars or [])
+        self.main_axes.clear()
+        self.count_axes.clear()
+        self.count_axes.set_visible(True)
         self._style_axes()
 
         if not self.bars:
@@ -123,26 +88,37 @@ class KLineCanvas(FigureCanvasQTAgg):
         body_epsilon = y_span * 0.012
 
         candle_colors = []
+        wick_segments = []
+        body_vertices = []
         for x_value, bar in zip(x_values, self.bars):
             color = self._bar_color(bar)
             candle_colors.append(color)
-            self.main_axes.vlines(x_value, bar.minimum, bar.maximum, color=color, linewidth=1.1, zorder=2)
+            wick_segments.append(((x_value, bar.minimum), (x_value, bar.maximum)))
             body_bottom = min(bar.first, bar.latest)
             body_height = max(abs(bar.latest - bar.first), body_epsilon)
             if bar.first == bar.latest:
                 body_bottom -= body_epsilon / 2.0
-            self.main_axes.add_patch(
-                Rectangle(
+            body_vertices.append(
+                (
                     (x_value - 0.31, body_bottom),
-                    0.62,
-                    body_height,
-                    facecolor=color,
-                    edgecolor=color,
-                    linewidth=0.8,
-                    alpha=0.9,
-                    zorder=3,
+                    (x_value + 0.31, body_bottom),
+                    (x_value + 0.31, body_bottom + body_height),
+                    (x_value - 0.31, body_bottom + body_height),
                 )
             )
+        self.main_axes.add_collection(
+            LineCollection(wick_segments, colors=candle_colors, linewidths=1.1, zorder=2)
+        )
+        self.main_axes.add_collection(
+            PolyCollection(
+                body_vertices,
+                facecolors=candle_colors,
+                edgecolors=candle_colors,
+                linewidths=0.8,
+                alpha=0.9,
+                zorder=3,
+            )
+        )
 
         self.main_axes.plot(
             x_values,
@@ -174,7 +150,10 @@ class KLineCanvas(FigureCanvasQTAgg):
         self.main_axes.tick_params(axis="x", labelbottom=False)
 
         counts = [bar.sample_count for bar in self.bars]
-        self.count_axes.bar(x_values, counts, width=0.64, color=candle_colors, alpha=0.78)
+        count_segments = [((x_value, 0), (x_value, count)) for x_value, count in zip(x_values, counts)]
+        self.count_axes.add_collection(
+            LineCollection(count_segments, colors=candle_colors, linewidths=5.0, alpha=0.78)
+        )
         self.count_axes.set_ylabel("采样", color="#526173", fontsize=8)
         self.count_axes.set_ylim(0, max(counts) * 1.2 + 0.5)
         tick_step = max(1, math.ceil(len(self.bars) / 8))
@@ -308,15 +287,15 @@ class SystemKLinePage(QWidget):
         super().__init__()
         self.current_cluster_index = None
         self.current_address = ""
-        self._samples = defaultdict(self._new_cluster_samples)
+        self.data_store = TrendDataStore(metrics=self.METRICS.keys())
         self._build_ui()
 
-    @staticmethod
-    def _new_cluster_samples():
-        return {
-            "voltage": deque(maxlen=24000),
-            "current": deque(maxlen=24000),
-        }
+    def set_data_store(self, data_store):
+        if data_store is None or data_store is self.data_store:
+            return
+        self.data_store = data_store
+        if self.isVisible():
+            self.refresh_active_chart(force=True)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -413,28 +392,33 @@ class SystemKLinePage(QWidget):
             return False
         if not math.isfinite(value) or not math.isfinite(timestamp):
             return False
-        self._samples[cluster_index][metric].append((timestamp, value))
+        accepted = self.data_store.add_sample(cluster_index, metric, value, timestamp)
+        if not accepted:
+            return False
+        self.notify_sample_added(cluster_index, metric)
+        return True
+
+    def notify_sample_added(self, cluster_index, metric):
         if (
             cluster_index == self.current_cluster_index
+            and metric in self.METRICS
             and not self.pause_checkbox.isChecked()
             and self.isVisible()
             and not self.redraw_timer.isActive()
         ):
             self.redraw_timer.start()
-        return True
 
     def sample_count(self, cluster_index, metric):
-        return len(self._samples.get(int(cluster_index), {}).get(metric, ()))
+        return self.data_store.sample_count(cluster_index, metric)
 
     def bars_for(self, cluster_index, metric, period_seconds=None, max_bars=None):
         if metric not in self.METRICS:
             return []
-        samples = self._samples.get(int(cluster_index), {}).get(metric, ())
         if period_seconds is None:
             period_seconds = self.period_selector.currentData()
         if max_bars is None:
             max_bars = self.window_selector.currentData()
-        return aggregate_period_statistics(samples, period_seconds, max_bars)
+        return self.data_store.bars_for(cluster_index, metric, period_seconds, max_bars)
 
     def refresh_active_chart(self, _value=None, force=False):
         if self.pause_checkbox.isChecked() and not force:
@@ -480,7 +464,7 @@ class SystemKLinePage(QWidget):
     def clear_current_cluster(self):
         cluster_index = self.current_cluster_index or 0
         if cluster_index > 0:
-            self._samples.pop(cluster_index, None)
+            self.data_store.clear_cluster(cluster_index)
         for panel in self.panels.values():
             panel.set_bars([])
         self._update_status()

@@ -80,8 +80,42 @@ def test_configuration_round_trip():
     _assert(build_cluster_addresses(runtime_config) == ["A0", "A1"], "cluster addresses mismatch")
 
 
+def test_trend_data_store():
+    from application.trend_store import TrendDataStore, aggregate_period_statistics
+
+    store = TrendDataStore(max_bars_per_period=24)
+    base = 1_700_000_000
+    samples = []
+    for index in range(5000):
+        timestamp = base + index
+        value = 600.0 + (index % 17) * 0.1
+        samples.append((timestamp, value))
+        _assert(store.add_sample(1, "voltage", value, timestamp), "trend sample should be accepted")
+
+    _assert(store.sample_count(1, "voltage") == 5000, "trend sample count mismatch")
+    _assert(len(store.bars_for(1, "voltage", 1, 240)) == 24, "trend store should enforce bar capacity")
+    _assert(len(store.bars_for(1, "voltage", 60, 10)) == 10, "trend window limit mismatch")
+    _assert(store.latest_value(1, "voltage") == samples[-1][1], "trend latest value mismatch")
+    stats = store.memory_stats()
+    _assert(stats["bar_count"] <= len(store.periods) * 24, "trend memory should remain bounded")
+
+    comparison_samples = samples[:25]
+    reference = aggregate_period_statistics(comparison_samples, 5, 24)
+    comparison_store = TrendDataStore(max_bars_per_period=24)
+    for timestamp, value in comparison_samples:
+        comparison_store.add_sample(1, "voltage", value, timestamp)
+    _assert(
+        comparison_store.bars_for(1, "voltage", 5, 24) == reference,
+        "incremental aggregation should match reference aggregation",
+    )
+    comparison_store.add_sample(2, "voltage", 700.0, base)
+    _assert(comparison_store.latest_value(1, "voltage") != 700.0, "trend clusters should be isolated")
+    comparison_store.clear_cluster(1)
+    _assert(comparison_store.sample_count(1, "voltage") == 0, "trend cluster clear mismatch")
+
+
 def test_session_logger_files():
-    from session_logger import SessionLogManager
+    from session_logger import SessionLogManager, _RollingCsvWriter
 
     with tempfile.TemporaryDirectory(prefix="aidc_logger_test_") as temp_dir:
         logger = SessionLogManager(
@@ -110,7 +144,23 @@ def test_session_logger_files():
         logger.write_temperature_snapshot("A0", [251, 252])
         logger.write_balance_snapshot("A0", [1, 0])
         logger.write_abnormal_snapshot("A0", [0, 2])
+        logger.flush()
+        _assert(logger.rx_writer.pending_row_count == 0, "explicit log flush should drain buffered rows")
         logger.close()
+
+        buffered_writer = _RollingCsvWriter(
+            Path(temp_dir) / "buffered.csv",
+            ["value"],
+            max_rows=100,
+            flush_row_interval=3,
+            flush_interval_s=3600,
+        )
+        buffered_writer.write_row([1])
+        buffered_writer.write_row([2])
+        _assert(buffered_writer.pending_row_count == 2, "log writer should buffer rows")
+        buffered_writer.write_row([3])
+        _assert(buffered_writer.pending_row_count == 0, "log writer should flush at row threshold")
+        buffered_writer.close()
 
         tx_rows = _read_csv(logger.tx_path)
         rx_rows = _read_csv(logger.rx_path)
@@ -350,8 +400,19 @@ def test_main_window_offscreen_logging():
             window.cluster_selector.currentData() > 0,
             "default cluster selector should still choose the first compiled cluster",
         )
+        compiled_cluster = int(window.cluster_selector.currentData())
+        compiled_address = int(window._cluster_address(compiled_cluster), 16)
+        _assert(
+            window._cluster_indices_for_frame_id(0x1881F200 | compiled_address) == (compiled_cluster,),
+            "addressed CAN frame should route directly to one cluster",
+        )
 
         window.show()
+        current_page = window.tabWidget.currentWidget()
+        window._defer_visible_page_repaint()
+        _assert(not current_page.updatesEnabled(), "receive batch should suspend visible page repaint")
+        app.processEvents()
+        _assert(current_page.updatesEnabled(), "visible page repaint should resume on the next event turn")
         for width, height in ((1024, 640), (1280, 720), (1366, 768), (1440, 900), (1920, 1080)):
             window.resize(width, height)
             for _ in range(3):
@@ -594,15 +655,19 @@ def test_main_window_offscreen_logging():
             window.log_scope_selector.setCurrentIndex(window.log_scope_selector.findData("all"))
             sent_log_queries = []
             original_query_data = window.QueryData
+            original_log_request_time = window.log_last_request_monotonic
             try:
                 window.QueryData = lambda cluster_index, data: sent_log_queries.append((cluster_index, list(data)))
                 window.BCUSignalQ = [0x1234]
                 window.log_poll_cluster_cursor = 0
                 window.log_poll_signal_index = 0
+                window.log_last_request_monotonic = 0.0
                 window._request_all_cluster_log_runtime_data()
+                window.log_last_request_monotonic = 0.0
                 window._request_all_cluster_log_runtime_data()
             finally:
                 window.QueryData = original_query_data
+                window.log_last_request_monotonic = original_log_request_time
             _assert([cluster_index for cluster_index, _data in sent_log_queries] == [1, 2], "all-scope log polling should cycle clusters")
             window.SaveRunData()
 
@@ -658,12 +723,22 @@ def test_main_window_offscreen_logging():
             _assert(window.S29.database is not None, "DBC parser page should load default IDC.dbc")
             _assert(window.S29.database.signal_count >= 90, "DBC parser page should expose default DBC signals")
             window.S29.clear_live_values()
-            window._handle_dbc_received_frame(
-                0x1204EFA0,
-                bytes([0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B, 0xA0, 0x0F]),
-                timestamp=123,
+            for timestamp in range(50):
+                window._handle_dbc_received_frame(
+                    0x1204EFA0,
+                    bytes([0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B, 0xA0, 0x0F]),
+                    timestamp=timestamp + 1,
+                )
+            _assert(window.S29.live_matched_count == 50, "DBC live decode should match received frames")
+            _assert(
+                window.S29.live_table.rowCount() == 0,
+                "hidden DBC page should defer table updates",
             )
-            _assert(window.S29.live_matched_count == 1, "DBC live decode should match received frame")
+            _assert(
+                0 < len(window.S29.live_pending_updates) < 20,
+                "DBC pending updates should retain only the latest value per signal",
+            )
+            window.S29.flush_live_updates()
             live_values = {}
             for row in range(window.S29.live_table.rowCount()):
                 signal_name = window.S29.live_table.item(row, 3).text()
@@ -816,6 +891,7 @@ def test_main_window_offscreen_logging():
 def main():
     tests = [
         test_configuration_round_trip,
+        test_trend_data_store,
         test_session_logger_files,
         test_module_cell_grid_module_extrema,
         test_cell_visualization_page,

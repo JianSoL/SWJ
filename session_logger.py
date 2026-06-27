@@ -1,9 +1,12 @@
 import csv
+import time
 from datetime import datetime
 from pathlib import Path
 
 
 MAX_ROWS_PER_FILE = 100000
+FLUSH_ROW_INTERVAL = 128
+FLUSH_INTERVAL_S = 0.5
 
 
 def _timestamp():
@@ -37,7 +40,14 @@ def _safe_path_segment(value, fallback):
 
 
 class _RollingCsvWriter:
-    def __init__(self, path, header, max_rows):
+    def __init__(
+        self,
+        path,
+        header,
+        max_rows,
+        flush_row_interval=FLUSH_ROW_INTERVAL,
+        flush_interval_s=FLUSH_INTERVAL_S,
+    ):
         self.base_path = Path(path)
         self.header = list(header)
         self.max_rows = int(max_rows)
@@ -45,6 +55,10 @@ class _RollingCsvWriter:
         self.row_count = 0
         self._file_handle = None
         self._writer = None
+        self.flush_row_interval = max(1, int(flush_row_interval))
+        self.flush_interval_s = max(0.0, float(flush_interval_s))
+        self.pending_row_count = 0
+        self.last_flush_monotonic = time.monotonic()
         self._initialize_file()
 
     @property
@@ -62,11 +76,25 @@ class _RollingCsvWriter:
             self._initialize_file()
 
         self._writer.writerow(row)
-        self._file_handle.flush()
         self.row_count += 1
+        self.pending_row_count += 1
+        now = time.monotonic()
+        if (
+            self.pending_row_count >= self.flush_row_interval
+            or now - self.last_flush_monotonic >= self.flush_interval_s
+        ):
+            self.flush()
+
+    def flush(self):
+        if self._file_handle is None:
+            return
+        self._file_handle.flush()
+        self.pending_row_count = 0
+        self.last_flush_monotonic = time.monotonic()
 
     def close(self):
         if self._file_handle is not None:
+            self.flush()
             self._file_handle.close()
             self._file_handle = None
             self._writer = None
@@ -78,6 +106,8 @@ class _RollingCsvWriter:
         self._writer = csv.writer(self._file_handle)
         self._writer.writerow(self.header)
         self._file_handle.flush()
+        self.pending_row_count = 0
+        self.last_flush_monotonic = time.monotonic()
 
 
 class SessionLogManager:
@@ -219,6 +249,10 @@ class SessionLogManager:
     def close(self):
         for writer in self._all_writers():
             writer.close()
+
+    def flush(self):
+        for writer in self._all_writers():
+            writer.flush()
 
     def _write_address_snapshot(self, writers, address, values, expected_count):
         if not self.enabled or expected_count <= 0:

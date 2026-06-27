@@ -21,6 +21,7 @@ from application.configuration import (
     load_can_board_config,
     save_can_board_config,
 )
+from application.trend_store import TrendDataStore
 from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
@@ -55,6 +56,8 @@ CAN_SILENT_DIAG_TIMEOUT_S = 0.35
 REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 200
 CELL_PAGE_REFRESH_INTERVAL_S = 0.2
 SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.25
+LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
+RX_STATUS_UI_INTERVAL_S = 0.25
 
 CTRL_WORK_MODE = 0x01
 CTRL_CHNNEL = 0x02
@@ -334,8 +337,10 @@ class Edit(Ui_Form, QWidget):
     def __init__(self):
         # 继承
         super().__init__()
+        self.trend_store = TrendDataStore()
         # 往空QWidget中放置UI内容
         self.setupUi(self)
+        self.S31.set_data_store(self.trend_store)
         self._apply_release_theme()
         #初始化各种功能
         self.init()
@@ -373,6 +378,7 @@ class Edit(Ui_Form, QWidget):
         action_parent = getattr(self, "product_action_row", self.product_command_bar)
 
         self.cluster_options = self._build_cluster_options()
+        self._rebuild_cluster_address_map()
         self._add_command_caption("当前簇", bus_layout)
         self.cluster_selector = QComboBox(bus_parent)
         self.cluster_selector.setMinimumWidth(130)
@@ -480,6 +486,32 @@ class Edit(Ui_Form, QWidget):
             if self._is_compiled_cluster_address(address):
                 options.append((cluster_index, address))
         return options
+
+
+    def _rebuild_cluster_address_map(self):
+        mapping = {}
+        for cluster_index, address in getattr(self, "cluster_options", []):
+            if int(cluster_index) <= 0:
+                continue
+            text = str(address).strip().upper()
+            if text.startswith("0X"):
+                text = text[2:]
+            try:
+                mapping[int(text, 16) & 0xFF] = int(cluster_index)
+            except ValueError:
+                continue
+        self.cluster_index_by_address_byte = mapping
+
+
+    def _cluster_indices_for_frame_id(self, frame_id):
+        try:
+            address_byte = int(frame_id) & 0xFF
+        except (TypeError, ValueError):
+            address_byte = -1
+        cluster_index = getattr(self, "cluster_index_by_address_byte", {}).get(address_byte)
+        if cluster_index is not None:
+            return (cluster_index,)
+        return tuple(range(1, int(config.get("BCU_NUM", 0)) + 1))
 
 
     def _is_compiled_cluster_address(self, address):
@@ -1145,9 +1177,13 @@ class Edit(Ui_Form, QWidget):
     def _set_status_pill(self, label, text, status):
         if label is None:
             return
-        label.setText(text)
-        label.setProperty("status", status)
-        self._refresh_dynamic_style(label)
+        text_changed = label.text() != str(text)
+        status_changed = label.property("status") != status
+        if text_changed:
+            label.setText(text)
+        if status_changed:
+            label.setProperty("status", status)
+            self._refresh_dynamic_style(label)
 
 
     def _set_bus_status(self, connected, message=None, status=None):
@@ -1161,12 +1197,34 @@ class Edit(Ui_Form, QWidget):
         self._set_status_pill(getattr(self, "bus_status_label", None), status_text, status_name)
 
 
-    def _update_rx_status(self):
+    def _update_rx_status(self, force=False):
+        now = time.monotonic()
+        last_update = float(getattr(self, "last_rx_status_update_monotonic", 0.0))
+        if not force and last_update and now - last_update < RX_STATUS_UI_INTERVAL_S:
+            return
+        self.last_rx_status_update_monotonic = now
         self._set_status_pill(
             getattr(self, "frame_status_label", None),
             f"RX: {getattr(self, 'rx_frame_count', 0)}",
             "info",
         )
+
+
+    def _defer_visible_page_repaint(self):
+        tab_widget = getattr(self, "tabWidget", None)
+        page = tab_widget.currentWidget() if tab_widget is not None else None
+        if page is None or not page.updatesEnabled():
+            return
+        page.setUpdatesEnabled(False)
+        QTimer.singleShot(0, lambda page=page: self._resume_page_updates(page))
+
+
+    def _resume_page_updates(self, page):
+        try:
+            page.setUpdatesEnabled(True)
+            page.update()
+        except RuntimeError:
+            pass
 
 
     def _reset_can_link_health(self):
@@ -1409,7 +1467,8 @@ class Edit(Ui_Form, QWidget):
 
     def _cache_system_kline_index_value(self, cluster_index, data_id, raw_word):
         page = getattr(self, "S31", None)
-        if page is None:
+        store = getattr(self, "trend_store", None)
+        if store is None:
             return
         try:
             cluster_index = int(cluster_index)
@@ -1420,9 +1479,15 @@ class Edit(Ui_Form, QWidget):
         if cluster_index <= 0:
             return
         if data_id == VAR_SYS_VOLT:
-            page.add_sample(cluster_index, "voltage", raw_word / 10.0)
+            metric = "voltage"
+            value = raw_word / 10.0
         elif data_id == VAR_SYS_CURR:
-            page.add_sample(cluster_index, "current", self._signed_u16(raw_word) / 10.0)
+            metric = "current"
+            value = self._signed_u16(raw_word) / 10.0
+        else:
+            return
+        if store.add_sample(cluster_index, metric, value, time.time()) and page is not None:
+            page.notify_sample_added(cluster_index, metric)
 
 
     def _runtime_table_index_for_cluster(self, cluster_index):
@@ -2647,7 +2712,7 @@ class Edit(Ui_Form, QWidget):
     def _connect_can(self, show_dialog=False):
         self._stop_can_timers()
         self.rx_frame_count = 0
-        self._update_rx_status()
+        self._update_rx_status(force=True)
         can_config = self._current_bus_config()
         config["SAVE_LOG"] = 1 if getattr(self, "save_log_checkbox", None) and self.save_log_checkbox.isChecked() else 0
 
@@ -2703,6 +2768,7 @@ class Edit(Ui_Form, QWidget):
     def init(self):
         self.can_ready = False
         self.rx_frame_count = 0
+        self.last_rx_status_update_monotonic = 0.0
         self.can_connected_monotonic = 0.0
         self.last_can_rx_monotonic = 0.0
         self.can_link_silent = False
@@ -2714,7 +2780,7 @@ class Edit(Ui_Form, QWidget):
         self._configure_single_cluster_tab()
         self._hide_embedded_cluster_controls()
         self._set_bus_status(False, "CAN: 未连接", "warning")
-        self._update_rx_status()
+        self._update_rx_status(force=True)
 
         # 创建一个QTimer对象
         self.send_time = QTimer(self)
@@ -2845,6 +2911,7 @@ class Edit(Ui_Form, QWidget):
         self.DXYC_index= 0
         self.log_poll_cluster_cursor = 0
         self.log_poll_signal_index = 0
+        self.log_last_request_monotonic = 0.0
 
         #参数查询
         #BCU参数查询1
@@ -2982,6 +3049,8 @@ class Edit(Ui_Form, QWidget):
             return
         if self.rec:
             self._record_rx_frames(self.rec)
+            if self.rec > 1:
+                self._defer_visible_page_repaint()
         else:
             self._update_can_link_health()
         ID = ""
@@ -3010,7 +3079,7 @@ class Edit(Ui_Form, QWidget):
 
             #################################################################################################################
             #index = self.table_index
-            for index in range(1, config["BCU_NUM"]+1):
+            for index in self._cluster_indices_for_frame_id(frame_obj.ID):
                 # if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                 #     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 #     if ((bauvarid == 0x9040D) and (config["Has_N"])==255):
@@ -4681,6 +4750,10 @@ class Edit(Ui_Form, QWidget):
     def _request_all_cluster_log_runtime_data(self):
         if not self._logging_enabled() or self._log_scope() != "all":
             return
+        now = time.monotonic()
+        last_request = float(getattr(self, "log_last_request_monotonic", 0.0))
+        if last_request and now - last_request < LOG_BACKGROUND_REQUEST_INTERVAL_S:
+            return
         targets = self._compiled_log_cluster_indices()
         if not targets or not getattr(self, "BCUSignalQ", None):
             return
@@ -4702,6 +4775,7 @@ class Edit(Ui_Form, QWidget):
             signal_cursor = (signal_cursor + 1) % len(self.BCUSignalQ)
         self.log_poll_cluster_cursor = cluster_cursor
         self.log_poll_signal_index = signal_cursor
+        self.log_last_request_monotonic = now
 
 
     def _request_system_kline_background(self):
@@ -5890,6 +5964,7 @@ class Edit(Ui_Form, QWidget):
                     manager.write_abnormal_snapshot(cluster_address, list(values))
                     self._clear_cluster_snapshot_dirty("abnormal", cluster_index)
                     self._reset_active_global_dirty_flags(cluster_index, "abnormal")
+            manager.flush()
         except Exception as exc:
             timer = getattr(self, "timerResData", None)
             if timer is not None:

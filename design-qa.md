@@ -64,7 +64,7 @@ No actionable P0, P1, or P2 header findings remain.
 ## System K-Line QA
 
 - Source visual truth: `C:\Users\ch\AppData\Local\Temp\codex-clipboard-f63d20c1-1b1d-47da-a570-21a3d7751605.png`
-- Implementation screenshot: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_main_1366x768.png`
+- Implementation screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_optimized_1366x768.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_optimized_1024x640.png`
 - Target states: total voltage and signed current, populated compiled cluster, 5-second period, 120-bar window
 - Responsive viewports: 1366 x 768 and 1920 x 1080
 
@@ -77,5 +77,14 @@ The implementation carries over the reference's K-line geometry while using BMS 
 - Layout: native Qt controls stay on one compact row while the chart consumes remaining height. No overlap was found at the tested laptop and desktop sizes.
 
 No actionable P0, P1, or P2 K-line findings remain.
+
+## Runtime Performance QA
+
+- Trend aggregation: 24,000 samples, 50 full legacy aggregations took approximately 1.45 s; 5,000 reads from the incremental store took approximately 0.017 s.
+- Trend memory: bars are capped at 480 per metric and period; sample counters may grow but stored series do not.
+- Chart rendering: 120-bar redraw improved from approximately 380 ms to 111 ms by replacing individual candle objects with three batched collections. A 240-bar redraw measured approximately 131 ms.
+- DBC rendering: hidden pages retain one pending value per decoded signal and perform no table writes; visible updates are committed every 200 ms.
+- Logging: CAN rows are buffered and flushed every 128 rows or 0.5 s; snapshot cycles and shutdown force a flush.
+- Multi-cluster parsing: addressed frames route directly by address byte; only non-addressed or broadcast frames use the compatibility fallback scan.
 
 final result: passed

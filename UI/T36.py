@@ -2,7 +2,7 @@ from pathlib import Path
 import sys
 import time
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -30,9 +30,14 @@ class DbcParsePage(QWidget):
         self.database = None
         self.default_dbc_path = self._default_dbc_path()
         self.live_signal_rows = {}
+        self.live_pending_updates = {}
         self.live_frame_count = 0
         self.live_matched_count = 0
         self._build_ui()
+        self.live_flush_timer = QTimer(self)
+        self.live_flush_timer.setSingleShot(True)
+        self.live_flush_timer.setInterval(200)
+        self.live_flush_timer.timeout.connect(self.flush_live_updates)
         if self.default_dbc_path is not None:
             self.file_path_edit.setText(str(self.default_dbc_path))
             self.parse_current_file(show_success=False)
@@ -330,7 +335,10 @@ class DbcParsePage(QWidget):
         self.signal_table.setRowCount(0)
 
     def clear_live_values(self):
+        if hasattr(self, "live_flush_timer"):
+            self.live_flush_timer.stop()
         self.live_signal_rows = {}
+        self.live_pending_updates = {}
         self.live_frame_count = 0
         self.live_matched_count = 0
         if hasattr(self, "live_table"):
@@ -349,14 +357,46 @@ class DbcParsePage(QWidget):
         self.live_frame_count += 1
         decoded = self.database.decode_frame(frame_id, data)
         if decoded is None:
-            self._update_live_summary()
+            self._schedule_live_flush()
             return
         self.live_matched_count += 1
         time_text = self._format_timestamp(timestamp)
         data_text = self._format_data_bytes(decoded.data)
         for decoded_signal in decoded.signals:
-            self._upsert_live_signal_row(decoded, decoded_signal, time_text, data_text)
+            key = (decoded.message.wire_frame_id, decoded_signal.signal.name)
+            self.live_pending_updates[key] = (decoded, decoded_signal, time_text, data_text)
+        self._schedule_live_flush()
+
+    def _schedule_live_flush(self):
+        if self.isVisible() and not self.live_flush_timer.isActive():
+            self.live_flush_timer.start()
+
+    def flush_live_updates(self):
+        pending = list(self.live_pending_updates.values())
+        self.live_pending_updates.clear()
+        if pending:
+            self.live_table.setUpdatesEnabled(False)
+            try:
+                for decoded, decoded_signal, time_text, data_text in pending:
+                    self._upsert_live_signal_row(decoded, decoded_signal, time_text, data_text)
+            finally:
+                self.live_table.setUpdatesEnabled(True)
+                self.live_table.viewport().update()
         self._update_live_summary()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.flush_live_updates()
+
+    def hideEvent(self, event):
+        if hasattr(self, "live_flush_timer"):
+            self.live_flush_timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event):
+        if hasattr(self, "live_flush_timer"):
+            self.live_flush_timer.stop()
+        super().closeEvent(event)
 
     def _format_timestamp(self, timestamp):
         if timestamp:
