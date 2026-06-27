@@ -533,6 +533,10 @@ class Edit(Ui_Form, QWidget):
         return config["BCU_NUM"] + 4
 
 
+    def _cell_visualization_tab_index(self):
+        return config["BCU_NUM"] + 13
+
+
     def _alarm_tab_index(self):
         return config["BCU_NUM"] + 5
 
@@ -838,6 +842,9 @@ class Edit(Ui_Form, QWidget):
             if hasattr(self, "S28"):
                 self.S28.clear_active_alarm_records()
                 self.S28.set_status_text("当前选择 00（未编制），不会读取实时告警。")
+            if hasattr(self, "S30"):
+                self.S30.clear_values()
+                self.S30.set_status_text("当前选择 00（未编制），不会显示单体数据。")
             return
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
@@ -849,6 +856,7 @@ class Edit(Ui_Form, QWidget):
         if hasattr(self, "S28"):
             self.S28.clear_active_alarm_records()
             self.S28.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
+        self._refresh_cell_visualization_page()
         if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
             self.S21.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
@@ -856,6 +864,23 @@ class Edit(Ui_Form, QWidget):
                 self.on_alarm_parameter_read()
         if getattr(self, "table_index", None) == self._control_tab_index() and getattr(self, "can_ready", False):
             self._refresh_host_control_snapshot(show_status=True)
+
+
+    def _refresh_cell_visualization_page(self):
+        page = getattr(self, "S30", None)
+        if page is None:
+            return
+        cluster_index = self._active_cluster_index()
+        if cluster_index <= 0:
+            page.clear_values()
+            page.set_status_text("当前选择 00（未编制），不会显示单体数据。")
+            return
+        voltage_values = self._cluster_snapshot_store("cluster_voltage_snapshots").get(cluster_index)
+        temperature_values = self._cluster_snapshot_store("cluster_temperature_snapshots").get(cluster_index)
+        page.set_values(
+            list(Vres) if voltage_values is None else list(voltage_values),
+            list(VresTem) if temperature_values is None else list(temperature_values),
+        )
 
 
     def _set_active_cluster(self, cluster_index, refresh=True, source=None):
@@ -883,6 +908,8 @@ class Edit(Ui_Form, QWidget):
                 self.S21.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S28"):
                 self.S28.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S30"):
+                self.S30.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
@@ -2877,6 +2904,8 @@ class Edit(Ui_Form, QWidget):
                 self._refresh_realtime_monitor_page()
             if index == self._control_tab_index():
                 self._refresh_host_control_snapshot(show_status=True)
+            if index == self._cell_visualization_tab_index():
+                self._refresh_cell_visualization_page()
 
 
 
@@ -3631,6 +3660,8 @@ class Edit(Ui_Form, QWidget):
                     if now - self.last_dy_time > CELL_PAGE_REFRESH_INTERVAL_S:
                         self.last_dy_time = now
                         self.S18.setVoltageValues(Vres)
+                        if self.table_index == self._cell_visualization_tab_index():
+                            self.S30.set_voltage_values(Vres)
                         self.voltage_snapshot_dirty = True
 
 
@@ -3729,6 +3760,8 @@ class Edit(Ui_Form, QWidget):
                     if now - self.last_tem_time > CELL_PAGE_REFRESH_INTERVAL_S:
                         self.last_tem_time = now
                         self.S20.setVoltageValues(VresTem)
+                        if self.table_index == self._cell_visualization_tab_index():
+                            self.S30.set_temperature_values(VresTem)
                         self.temperature_snapshot_dirty = True
 
 

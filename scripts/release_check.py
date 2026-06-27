@@ -19,6 +19,7 @@ CORE_PYTHON_FILES = [
     "UI/T24.py",
     "UI/T34.py",
     "UI/T36.py",
+    "UI/T37.py",
     "scripts/can_smoke.py",
     "scripts/self_test.py",
 ]

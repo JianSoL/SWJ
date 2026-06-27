@@ -33,6 +33,7 @@ from .T33 import HistoryLogPage as UI33
 from .T34 import RealtimeMonitorPage as UI34
 from .T35 import ActiveAlarmPage as UI35
 from .T36 import DbcParsePage as UI36
+from .T37 import CellVisualizationPage as UI37
 from .conf import config
 from .responsive import FlowLayout
 
@@ -177,7 +178,7 @@ class Ui_Form(object):
         Form.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+11)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+12)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
@@ -199,6 +200,7 @@ class Ui_Form(object):
         self.S27 = UI34()
         self.S28 = UI35()
         self.S29 = UI36()
+        self.S30 = UI37()
 
         layout = QVBoxLayout(self.tab[CU_NUM+4])
         layout.addWidget(self.S28)
@@ -236,6 +238,9 @@ class Ui_Form(object):
 
         layout = QVBoxLayout(self.tab[CU_NUM+10])
         layout.addWidget(self.S29)
+
+        layout = QVBoxLayout(self.tab[CU_NUM+11])
+        layout.addWidget(self.S30)
 
 
 
@@ -302,7 +307,7 @@ class Ui_Form(object):
 
         self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
 
-        for i in range(0,CU_NUM+11):
+        for i in range(0,CU_NUM+12):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
             self.tabWidget.tabBar().setTabVisible(0, False)
@@ -363,6 +368,7 @@ class Ui_Form(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+8]), "均衡控制")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+9]), "历史日志")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+10]), "DBC解析")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+11]), "单体3D")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 

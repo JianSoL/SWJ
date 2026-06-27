@@ -150,6 +150,66 @@ def test_module_cell_grid_module_extrema():
             app.quit()
 
 
+def test_cell_visualization_page():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from PyQt6.QtWidgets import QApplication
+
+    from UI.T37 import CellVisualizationPage
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    page = CellVisualizationPage()
+    try:
+        voltage_count = page.voltage_panel.module_count * page.voltage_panel.cells_per_module
+        temperature_count = page.temperature_panel.module_count * page.temperature_panel.cells_per_module
+        voltage_values = [3300] * voltage_count
+        voltage_values[0] = 3288
+        voltage_values[1] = 0
+        voltage_values[-1] = 3321
+        temperature_values = [250] * temperature_count
+        temperature_values[0] = -55
+        temperature_values[-1] = 407
+        page.show()
+        page.set_values(voltage_values, temperature_values)
+        page.redraw_timer.stop()
+        page._redraw_active_chart()
+
+        _assert(page.voltage_panel.summary["count"] == voltage_count - 1, "voltage 3D count mismatch")
+        _assert(page.voltage_panel.summary["minimum"] == 3288, "voltage 3D minimum mismatch")
+        _assert(page.voltage_panel.summary["maximum"] == 3321, "voltage 3D maximum mismatch")
+        _assert(page.voltage_panel.summary["minimum_index"] == 0, "voltage 3D minimum position mismatch")
+        _assert(
+            page.voltage_panel.summary["maximum_index"] == voltage_count - 1,
+            "voltage 3D maximum position mismatch",
+        )
+        _assert(page.temperature_panel.summary["minimum"] == -5.5, "temperature scaling mismatch")
+        _assert(page.temperature_panel.summary["maximum"] == 40.7, "temperature maximum mismatch")
+
+        page.resize(1366, 768)
+        for _ in range(3):
+            app.processEvents()
+        _assert(page.chart_tabs.width() > 1000, "3D chart should fill laptop width")
+        _assert(len(page.voltage_panel.canvas.entries) == voltage_count - 1, "voltage bars were not rendered")
+
+        page.resize(1920, 1080)
+        for _ in range(3):
+            app.processEvents()
+        _assert(page.chart_tabs.width() > 1500, "3D chart should expand at desktop width")
+        page.chart_tabs.setCurrentIndex(1)
+        for _ in range(3):
+            app.processEvents()
+        _assert(len(page.temperature_panel.canvas.entries) == temperature_count, "temperature bars were not rendered")
+
+        page.clear_values()
+        _assert(page.voltage_panel.summary["count"] == 0, "voltage 3D chart should clear")
+        _assert(page.temperature_panel.summary["count"] == 0, "temperature 3D chart should clear")
+    finally:
+        page.close()
+        if created_app:
+            app.quit()
+
+
 def test_dbc_parser():
     from application.dbc_parser import parse_dbc_file
 
@@ -416,6 +476,25 @@ def test_main_window_offscreen_logging():
             _assert("实时告警" in tab_names, "active alarm tab is missing")
             _assert("实时监控" in tab_names, "realtime monitor tab is missing")
             _assert("DBC解析" in tab_names, "DBC parser tab is missing")
+            _assert("单体3D" in tab_names, "cell 3D tab is missing")
+            active_cluster = window._active_cluster_index()
+            visualization_voltages = [3310 + (index % 7) for index in range(cell_count)]
+            visualization_temperatures = [245 + (index % 11) for index in range(temp_count)]
+            window._cluster_snapshot_store("cluster_voltage_snapshots")[active_cluster] = visualization_voltages
+            window._cluster_snapshot_store("cluster_temperature_snapshots")[active_cluster] = visualization_temperatures
+            window.tabWidget.setCurrentIndex(window._cell_visualization_tab_index())
+            _assert(
+                window.S30.voltage_panel.summary["count"] == cell_count,
+                "cell visualization should load current cluster voltage cache",
+            )
+            _assert(
+                window.S30.temperature_panel.summary["count"] == temp_count,
+                "cell visualization should load current cluster temperature cache",
+            )
+            window._set_active_cluster(0, refresh=True, source="self_test")
+            _assert(window.S30.voltage_panel.summary["count"] == 0, "00 cluster should clear voltage heatmap")
+            _assert(window.S30.temperature_panel.summary["count"] == 0, "00 cluster should clear temperature heatmap")
+            window._set_active_cluster(active_cluster, refresh=True, source="self_test")
             _assert(window.S29.database is not None, "DBC parser page should load default IDC.dbc")
             _assert(window.S29.database.signal_count >= 90, "DBC parser page should expose default DBC signals")
             window.S29.clear_live_values()
@@ -579,6 +658,7 @@ def main():
         test_configuration_round_trip,
         test_session_logger_files,
         test_module_cell_grid_module_extrema,
+        test_cell_visualization_page,
         test_dbc_parser,
         test_main_window_offscreen_logging,
     ]
