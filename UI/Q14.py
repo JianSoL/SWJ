@@ -116,14 +116,16 @@ class Ui_Form(object):
         self.product_header = QtWidgets.QFrame(parent=Form)
         self.product_header.setObjectName("productHeader")
         self.product_header_layout = QHBoxLayout(self.product_header)
-        self.product_header_layout.setContentsMargins(24, 10, 24, 10)
-        self.product_header_layout.setSpacing(18)
+        self.product_header_layout.setContentsMargins(20, 8, 20, 8)
+        self.product_header_layout.setSpacing(16)
 
         self.product_brand_block = QtWidgets.QWidget(parent=self.product_header)
         self.product_brand_block.setObjectName("productBrandBlock")
+        self.product_brand_block.setMinimumWidth(190)
+        self.product_brand_block.setMaximumWidth(220)
         self.product_brand_layout = QVBoxLayout(self.product_brand_block)
         self.product_brand_layout.setContentsMargins(0, 0, 0, 0)
-        self.product_brand_layout.setSpacing(2)
+        self.product_brand_layout.setSpacing(0)
         self.product_logo = QtWidgets.QLabel(parent=self.product_brand_block)
         self.product_logo.setObjectName("productLogo")
         self.product_logo.setText("AIDC")
@@ -140,15 +142,32 @@ class Ui_Form(object):
         self.product_command_bar = QtWidgets.QFrame(parent=self.product_header)
         self.product_command_bar.setObjectName("productCommandBar")
         self.product_command_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.product_command_layout = FlowLayout(
-            self.product_command_bar,
-            margin=0,
-            horizontal_spacing=8,
-            vertical_spacing=8,
-        )
+        self.product_command_stack = QVBoxLayout(self.product_command_bar)
+        self.product_command_stack.setContentsMargins(0, 0, 0, 0)
+        self.product_command_stack.setSpacing(6)
 
-        self.product_header_layout.addWidget(self.product_brand_block, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.product_header_layout.addWidget(self.product_command_bar, 1, Qt.AlignmentFlag.AlignVCenter)
+        self.product_bus_row = QtWidgets.QFrame(parent=self.product_command_bar)
+        self.product_bus_row.setObjectName("productCommandRow")
+        self.product_bus_layout = FlowLayout(
+            self.product_bus_row,
+            margin=0,
+            horizontal_spacing=7,
+            vertical_spacing=6,
+        )
+        self.product_action_row = QtWidgets.QFrame(parent=self.product_command_bar)
+        self.product_action_row.setObjectName("productCommandRow")
+        self.product_action_layout = FlowLayout(
+            self.product_action_row,
+            margin=0,
+            horizontal_spacing=7,
+            vertical_spacing=6,
+        )
+        self.product_command_stack.addWidget(self.product_bus_row)
+        self.product_command_stack.addWidget(self.product_action_row)
+        self.product_command_layout = self.product_bus_layout
+
+        self.product_header_layout.addWidget(self.product_brand_block, 0, Qt.AlignmentFlag.AlignTop)
+        self.product_header_layout.addWidget(self.product_command_bar, 1)
 
         # 创建水平和垂直布局
         v_layout = QVBoxLayout()

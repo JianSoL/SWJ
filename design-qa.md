@@ -44,4 +44,21 @@
 - [x] Responsive 1366 x 768 and 1920 x 1080 rendering
 - [x] Empty and uncompiled-cluster states
 
+## Header Redesign QA
+
+- Defect evidence: `C:\Users\ch\AppData\Local\Temp\codex-clipboard-0433065d-f875-4236-96a5-5d468fae4afa.png`
+- Implementation screenshot: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\header_widget_corrected_1415.png`
+- Viewport width: 1415 px
+- State: disconnected CAN, first compiled cluster selected, logging disabled
+
+The original single row mixes connection, system, factory, and logging controls and pushes later states beyond the visible region. The revised header separates connection and receive status from system, factory, and logging actions; both rows use centered control baselines and remain fully visible. The brand block is capped at 220 px, header height falls to 87 px, and the command area gains a predictable left-to-right scan order.
+
+- Fonts and typography: captions use a consistent 12 px weight and align vertically with their associated controls.
+- Spacing and layout: both command rows use 7 px horizontal spacing and a 6 px row gap; no overlap was found from 1024 x 640 through 1920 x 1080.
+- Colors and tokens: primary, warning, success, and neutral states continue using the existing release theme.
+- Copy and content: every original command and status remains available; only grouping and order changed.
+- Accessibility: the tighter layout preserves existing tooltips and minimum control heights. Keyboard and screen-reader behavior still depends on the native Qt controls.
+
+No actionable P0, P1, or P2 header findings remain.
+
 final result: passed

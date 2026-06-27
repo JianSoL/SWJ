@@ -90,24 +90,41 @@ class FlowLayout(QLayout):
         return width
 
     def _do_layout(self, rect, test_only):
-        x = rect.x()
-        y = rect.y()
+        available_width = max(0, rect.width())
+        lines = []
+        line_items = []
+        line_width = 0
         line_height = 0
-        right_edge = rect.x() + max(0, rect.width())
-
         for index, item in enumerate(self._items):
             hint = item.sizeHint()
             item_width = hint.width()
             required_width = self._item_width(index)
-            next_x = x + required_width
-            if line_height > 0 and next_x > right_edge:
-                x = rect.x()
-                y += line_height + self._vertical_spacing
+            spacing = self._horizontal_spacing if line_items else 0
+            if line_items and line_width + spacing + required_width > available_width:
+                lines.append((line_items, line_height))
+                line_items = []
+                line_width = 0
                 line_height = 0
-
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x += item_width + self._horizontal_spacing
+                spacing = 0
+            line_items.append(item)
+            line_width += spacing + item_width
             line_height = max(line_height, hint.height())
+        if line_items:
+            lines.append((line_items, line_height))
 
-        return y + line_height - rect.y()
+        y = rect.y()
+        for items, current_line_height in lines:
+            x = rect.x()
+            for item_index, item in enumerate(items):
+                hint = item.sizeHint()
+                if item_index:
+                    x += self._horizontal_spacing
+                if not test_only:
+                    centered_y = y + max(0, (current_line_height - hint.height()) // 2)
+                    item.setGeometry(QRect(QPoint(x, centered_y), hint))
+                x += hint.width()
+            y += current_line_height + self._vertical_spacing
+
+        if lines:
+            y -= self._vertical_spacing
+        return y - rect.y()

@@ -266,22 +266,30 @@ def test_main_window_offscreen_logging():
             for _ in range(3):
                 app.processEvents()
 
-            visible_controls = []
-            for item_index in range(window.product_command_layout.count()):
-                item = window.product_command_layout.itemAt(item_index)
-                widget = item.widget() if item is not None else None
-                if widget is not None and widget.isVisible():
-                    visible_controls.append(widget)
-                    _assert(
-                        window.product_command_bar.rect().contains(widget.geometry()),
-                        f"header control escaped command area at {width}x{height}",
-                    )
-            for left_index, left_widget in enumerate(visible_controls):
-                for right_widget in visible_controls[left_index + 1:]:
-                    _assert(
-                        not left_widget.geometry().intersects(right_widget.geometry()),
-                        f"header controls overlap at {width}x{height}",
-                    )
+            for command_layout, command_row in (
+                (window.product_bus_layout, window.product_bus_row),
+                (window.product_action_layout, window.product_action_row),
+            ):
+                visible_controls = []
+                for item_index in range(command_layout.count()):
+                    item = command_layout.itemAt(item_index)
+                    widget = item.widget() if item is not None else None
+                    if widget is not None and widget.isVisible():
+                        visible_controls.append(widget)
+                        _assert(
+                            command_row.rect().contains(widget.geometry()),
+                            f"header control escaped its command row at {width}x{height}",
+                        )
+                for left_index, left_widget in enumerate(visible_controls):
+                    for right_widget in visible_controls[left_index + 1:]:
+                        _assert(
+                            not left_widget.geometry().intersects(right_widget.geometry()),
+                            f"header controls overlap at {width}x{height}",
+                        )
+            _assert(
+                not window.product_bus_row.geometry().intersects(window.product_action_row.geometry()),
+                f"header command rows overlap at {width}x{height}",
+            )
 
             window.tabWidget.setCurrentIndex(window.CLUSTER_TAB_INDEX)
             for _ in range(2):

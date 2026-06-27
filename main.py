@@ -352,11 +352,12 @@ class Edit(Ui_Form, QWidget):
             print(f"load release theme failed: {exc}")
 
 
-    def _add_command_caption(self, text):
-        label = QLabel(text, self.product_command_bar)
+    def _add_command_caption(self, text, layout=None):
+        target_layout = layout or self.product_command_layout
+        label = QLabel(text, target_layout.parentWidget() or self.product_command_bar)
         label.setObjectName("fieldCaption")
         label.setProperty("flowKeepNext", True)
-        self.product_command_layout.addWidget(label)
+        target_layout.addWidget(label)
         return label
 
 
@@ -366,9 +367,14 @@ class Edit(Ui_Form, QWidget):
         if not hasattr(self, "product_command_layout"):
             return
 
+        bus_layout = getattr(self, "product_bus_layout", self.product_command_layout)
+        action_layout = getattr(self, "product_action_layout", self.product_command_layout)
+        bus_parent = getattr(self, "product_bus_row", self.product_command_bar)
+        action_parent = getattr(self, "product_action_row", self.product_command_bar)
+
         self.cluster_options = self._build_cluster_options()
-        self._add_command_caption("当前簇")
-        self.cluster_selector = QComboBox(self.product_command_bar)
+        self._add_command_caption("当前簇", bus_layout)
+        self.cluster_selector = QComboBox(bus_parent)
         self.cluster_selector.setMinimumWidth(130)
         for cluster_index, address in self.cluster_options:
             self.cluster_selector.addItem(
@@ -386,81 +392,81 @@ class Edit(Ui_Form, QWidget):
             self.selected_cluster_address = ""
             self.cluster_selector.setEnabled(False)
         self.cluster_selector.currentIndexChanged.connect(self.on_cluster_selector_changed)
-        self.product_command_layout.addWidget(self.cluster_selector)
-        self.product_command_layout.addSpacing(8)
+        bus_layout.addWidget(self.cluster_selector)
+        bus_layout.addSpacing(5)
 
-        self._add_command_caption("设备")
-        self.device_index_spinbox = QSpinBox(self.product_command_bar)
+        self._add_command_caption("设备", bus_layout)
+        self.device_index_spinbox = QSpinBox(bus_parent)
         self.device_index_spinbox.setRange(0, 31)
         self.device_index_spinbox.setFixedWidth(64)
-        self.product_command_layout.addWidget(self.device_index_spinbox)
+        bus_layout.addWidget(self.device_index_spinbox)
 
-        self._add_command_caption("通道")
-        self.channel_index_spinbox = QSpinBox(self.product_command_bar)
+        self._add_command_caption("通道", bus_layout)
+        self.channel_index_spinbox = QSpinBox(bus_parent)
         self.channel_index_spinbox.setRange(0, 7)
         self.channel_index_spinbox.setFixedWidth(64)
-        self.product_command_layout.addWidget(self.channel_index_spinbox)
+        bus_layout.addWidget(self.channel_index_spinbox)
 
-        self._add_command_caption("波特率")
-        self.baud_rate_spinbox = QSpinBox(self.product_command_bar)
+        self._add_command_caption("波特率", bus_layout)
+        self.baud_rate_spinbox = QSpinBox(bus_parent)
         self.baud_rate_spinbox.setRange(5, 1000)
         self.baud_rate_spinbox.setSingleStep(5)
         self.baud_rate_spinbox.setSuffix(" k")
         self.baud_rate_spinbox.setFixedWidth(92)
-        self.product_command_layout.addWidget(self.baud_rate_spinbox)
+        bus_layout.addWidget(self.baud_rate_spinbox)
 
-        self.has_neutral_checkbox = QCheckBox("带中线", self.product_command_bar)
+        self.has_neutral_checkbox = QCheckBox("带中线", bus_parent)
         self.has_neutral_checkbox.setToolTip("切换后将清空当前簇缓存，并按有/无中线协议重新解析数据。")
         self.has_neutral_checkbox.toggled.connect(self.on_has_neutral_toggled)
-        self.product_command_layout.addWidget(self.has_neutral_checkbox)
+        bus_layout.addWidget(self.has_neutral_checkbox)
 
-        self.system_config_button = QPushButton("系统配置", self.product_command_bar)
+        self.apply_bus_button = QPushButton("应用并重连", bus_parent)
+        self.apply_bus_button.setObjectName("primaryButton")
+        self.apply_bus_button.clicked.connect(self.on_apply_bus_settings)
+        bus_layout.addWidget(self.apply_bus_button)
+
+        self.bus_status_label = QLabel("CAN: 未连接", bus_parent)
+        self.bus_status_label.setObjectName("statusPill")
+        bus_layout.addWidget(self.bus_status_label)
+
+        self.frame_status_label = QLabel("RX: 0", bus_parent)
+        self.frame_status_label.setObjectName("statusPill")
+        bus_layout.addWidget(self.frame_status_label)
+
+        self.system_config_button = QPushButton("系统配置", action_parent)
         self.system_config_button.setToolTip("配置可切换簇数、模组数、每模组单体数、每模组温度数和日志存储间隔。")
         self.system_config_button.clicked.connect(self.on_system_config_requested)
-        self.product_command_layout.addWidget(self.system_config_button)
+        action_layout.addWidget(self.system_config_button)
 
-        self.save_log_checkbox = QCheckBox("日志", self.product_command_bar)
+        self.factory_on_button = QPushButton("工装开", action_parent)
+        self.factory_on_button.clicked.connect(lambda: self.on_factory_mode_change(True))
+        action_layout.addWidget(self.factory_on_button)
+
+        self.factory_off_button = QPushButton("工装关", action_parent)
+        self.factory_off_button.clicked.connect(lambda: self.on_factory_mode_change(False))
+        action_layout.addWidget(self.factory_off_button)
+
+        self.factory_status_label = QLabel("工装状态: 未知", action_parent)
+        self.factory_status_label.setObjectName("statusPill")
+        self.factory_status_label.setProperty("status", "warning")
+        action_layout.addWidget(self.factory_status_label)
+
+        self.save_log_checkbox = QCheckBox("日志", action_parent)
         self.save_log_checkbox.toggled.connect(self.on_save_log_toggled)
-        self.product_command_layout.addWidget(self.save_log_checkbox)
+        action_layout.addWidget(self.save_log_checkbox)
 
-        self._add_command_caption("范围")
-        self.log_scope_selector = QComboBox(self.product_command_bar)
+        self._add_command_caption("范围", action_layout)
+        self.log_scope_selector = QComboBox(action_parent)
         self.log_scope_selector.setFixedWidth(96)
         self.log_scope_selector.addItem("当前簇", "current")
         self.log_scope_selector.addItem("所有簇", "all")
         self.log_scope_selector.currentIndexChanged.connect(self.on_log_scope_changed)
-        self.product_command_layout.addWidget(self.log_scope_selector)
+        action_layout.addWidget(self.log_scope_selector)
 
-        self.log_status_label = QLabel("日志: 关 / 当前簇", self.product_command_bar)
+        self.log_status_label = QLabel("日志: 关 / 当前簇", action_parent)
         self.log_status_label.setObjectName("statusPill")
         self.log_status_label.setProperty("status", "warning")
-        self.product_command_layout.addWidget(self.log_status_label)
-
-        self.apply_bus_button = QPushButton("应用并重连", self.product_command_bar)
-        self.apply_bus_button.setObjectName("primaryButton")
-        self.apply_bus_button.clicked.connect(self.on_apply_bus_settings)
-        self.product_command_layout.addWidget(self.apply_bus_button)
-
-        self.factory_on_button = QPushButton("工装开", self.product_command_bar)
-        self.factory_on_button.clicked.connect(lambda: self.on_factory_mode_change(True))
-        self.product_command_layout.addWidget(self.factory_on_button)
-
-        self.factory_off_button = QPushButton("工装关", self.product_command_bar)
-        self.factory_off_button.clicked.connect(lambda: self.on_factory_mode_change(False))
-        self.product_command_layout.addWidget(self.factory_off_button)
-
-        self.factory_status_label = QLabel("工装状态: 未知", self.product_command_bar)
-        self.factory_status_label.setObjectName("statusPill")
-        self.factory_status_label.setProperty("status", "warning")
-        self.product_command_layout.addWidget(self.factory_status_label)
-
-        self.bus_status_label = QLabel("CAN: 未连接", self.product_command_bar)
-        self.bus_status_label.setObjectName("statusPill")
-        self.product_command_layout.addWidget(self.bus_status_label)
-
-        self.frame_status_label = QLabel("RX: 0", self.product_command_bar)
-        self.frame_status_label.setObjectName("statusPill")
-        self.product_command_layout.addWidget(self.frame_status_label)
+        action_layout.addWidget(self.log_status_label)
 
         self._product_controls_ready = True
 

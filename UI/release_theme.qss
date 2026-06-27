@@ -23,7 +23,7 @@ QLabel#productLogo {
     color: #101828;
     background: transparent;
     border: none;
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 800;
     letter-spacing: 0;
 }
@@ -38,6 +38,11 @@ QLabel#productContext {
 }
 
 QFrame#productCommandBar {
+    background: transparent;
+    border: none;
+}
+
+QFrame#productCommandRow {
     background: transparent;
     border: none;
 }
@@ -83,8 +88,8 @@ QLabel#statusPill {
     color: #344256;
     background: #f4f7fb;
     border: 1px solid #d4deea;
-    border-radius: 8px;
-    padding: 6px 12px;
+    border-radius: 6px;
+    padding: 5px 10px;
     font-weight: 800;
 }
 
@@ -287,4 +292,22 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background: #1f66e5;
     border-color: #1f66e5;
+}
+
+QFrame#productHeader QPushButton {
+    min-height: 18px;
+    padding: 6px 10px;
+}
+
+QFrame#productHeader QLineEdit,
+QFrame#productHeader QSpinBox,
+QFrame#productHeader QComboBox,
+QFrame#productHeader QAbstractSpinBox {
+    min-height: 18px;
+    padding: 5px 8px;
+}
+
+QFrame#productHeader QCheckBox::indicator {
+    width: 15px;
+    height: 15px;
 }
