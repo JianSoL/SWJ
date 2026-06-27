@@ -61,4 +61,21 @@ The original single row mixes connection, system, factory, and logging controls 
 
 No actionable P0, P1, or P2 header findings remain.
 
+## System K-Line QA
+
+- Source visual truth: `C:\Users\ch\AppData\Local\Temp\codex-clipboard-f63d20c1-1b1d-47da-a570-21a3d7751605.png`
+- Implementation screenshot: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_main_1366x768.png`
+- Target states: total voltage and signed current, populated compiled cluster, 5-second period, 120-bar window
+- Responsive viewports: 1366 x 768 and 1920 x 1080
+
+The implementation carries over the reference's K-line geometry while using BMS sampling terms throughout: period-first value, period maximum, period minimum, latest value, and five-period average. A rise from the period-first value is red and a fall is green. Financial-only close-price, MACD, and trade annotations are intentionally omitted; the lower panel reports CAN sample count per period, which is meaningful for equipment diagnostics.
+
+- Data fidelity: voltage index 13 is scaled to 0.1 V; current index 14 is decoded as signed 16-bit and scaled to 0.1 A.
+- Isolation: raw samples and aggregated bars are stored per cluster. Selecting 00 displays an empty state without deleting compiled-cluster history.
+- Controls: 1/5/10/30/60-second periods, 60/120/240-bar windows, pause-with-background-capture, current-cluster clear, pan, zoom, reset, and image export.
+- Refresh behavior: successful index responses feed the chart directly; failed responses are ignored; canvas redraw is throttled to 320 ms.
+- Layout: native Qt controls stay on one compact row while the chart consumes remaining height. No overlap was found at the tested laptop and desktop sizes.
+
+No actionable P0, P1, or P2 K-line findings remain.
+
 final result: passed

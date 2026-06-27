@@ -543,6 +543,10 @@ class Edit(Ui_Form, QWidget):
         return config["BCU_NUM"] + 13
 
 
+    def _system_kline_tab_index(self):
+        return config["BCU_NUM"] + 14
+
+
     def _alarm_tab_index(self):
         return config["BCU_NUM"] + 5
 
@@ -727,6 +731,7 @@ class Edit(Ui_Form, QWidget):
             "BCUSignalQ_index",
             "BCUSignalQ_DXYC_index",
             "realtime_monitor_query_index",
+            "system_kline_query_index",
             "current_COUNT",
         ):
             if hasattr(self, attr_name):
@@ -916,6 +921,8 @@ class Edit(Ui_Form, QWidget):
                 self.S28.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S30"):
                 self.S30.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S31"):
+                self.S31.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
@@ -1396,6 +1403,25 @@ class Edit(Ui_Form, QWidget):
             return
         self._cache_realtime_monitor_index_value(cluster_index, data_id, raw_word)
         self._cache_runtime_record_index_value(cluster_index, data_id, raw_word)
+        self._cache_system_kline_index_value(cluster_index, data_id, raw_word)
+
+
+    def _cache_system_kline_index_value(self, cluster_index, data_id, raw_word):
+        page = getattr(self, "S31", None)
+        if page is None:
+            return
+        try:
+            cluster_index = int(cluster_index)
+            data_id = int(data_id)
+            raw_word = int(raw_word) & 0xFFFF
+        except (TypeError, ValueError):
+            return
+        if cluster_index <= 0:
+            return
+        if data_id == VAR_SYS_VOLT:
+            page.add_sample(cluster_index, "voltage", raw_word / 10.0)
+        elif data_id == VAR_SYS_CURR:
+            page.add_sample(cluster_index, "current", self._signed_u16(raw_word) / 10.0)
 
 
     def _runtime_table_index_for_cluster(self, cluster_index):
@@ -2868,6 +2894,7 @@ class Edit(Ui_Form, QWidget):
             data_id = int(definition["data_id"])
             self.realtime_monitor_definitions_by_id.setdefault(data_id, []).append(definition)
         self.realtime_monitor_query_index = 0
+        self.system_kline_query_index = 0
         self.realtime_monitor_raw_words = {
             cluster_index: {}
             for cluster_index, _address in getattr(self, "cluster_options", [])
@@ -2912,6 +2939,8 @@ class Edit(Ui_Form, QWidget):
                 self._refresh_host_control_snapshot(show_status=True)
             if index == self._cell_visualization_tab_index():
                 self._refresh_cell_visualization_page()
+            if index == self._system_kline_tab_index():
+                self.S31.refresh_active_chart(force=True)
 
 
 
@@ -4679,6 +4708,16 @@ class Edit(Ui_Form, QWidget):
                     data = [data&0xFF, (data>>8)&0xFF,  (data>>16)&0xFF,  (data>>24)&0xFF, 0, 0, 0, 0]
                     self.QueryData(index,data)
                     self.realtime_monitor_query_index = (self.realtime_monitor_query_index + 1) % len(signal_ids)
+            return
+
+        if self.table_index == self._system_kline_tab_index():
+            index = self._active_cluster_index()
+            signal_ids = (VAR_SYS_VOLT, VAR_SYS_CURR)
+            if index > 0:
+                data_id = signal_ids[self.system_kline_query_index]
+                data = [data_id & 0xFF, (data_id >> 8) & 0xFF, 0, 0, 0, 0, 0, 0]
+                self.QueryData(index, data)
+                self.system_kline_query_index = (self.system_kline_query_index + 1) % len(signal_ids)
             return
 
         if self.table_index == self.CLUSTER_TAB_INDEX:

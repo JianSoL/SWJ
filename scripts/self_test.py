@@ -210,6 +210,78 @@ def test_cell_visualization_page():
             app.quit()
 
 
+def test_system_kline_page():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from UI.T38 import SystemKLinePage, aggregate_period_statistics
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    page = SystemKLinePage()
+    try:
+        bucket_start = 1_700_000_000
+        bucket_start -= bucket_start % 5
+        samples = [
+            (bucket_start + 0.2, 600.0),
+            (bucket_start + 1.0, 602.5),
+            (bucket_start + 2.0, 598.5),
+            (bucket_start + 4.8, 601.0),
+            (bucket_start + 5.1, 603.0),
+        ]
+        bars = aggregate_period_statistics(samples, 5, 120)
+        _assert(len(bars) == 2, "K-line aggregation should produce two buckets")
+        _assert(bars[0].first == 600.0, "K-line period-first value mismatch")
+        _assert(bars[0].maximum == 602.5, "K-line period-maximum mismatch")
+        _assert(bars[0].minimum == 598.5, "K-line period-minimum mismatch")
+        _assert(bars[0].latest == 601.0, "K-line latest value mismatch")
+        _assert(bars[0].sample_count == 4, "K-line sample count mismatch")
+
+        page.set_cluster_context(1, "A0")
+        for timestamp, value in samples:
+            _assert(page.add_sample(1, "voltage", value, timestamp), "voltage sample should be accepted")
+        page.add_sample(1, "current", -12.5, bucket_start + 0.5)
+        page.add_sample(1, "current", 8.0, bucket_start + 1.5)
+        page.add_sample(2, "voltage", 700.0, bucket_start + 0.5)
+        _assert(len(page.bars_for(1, "voltage", 5, 120)) == 2, "cluster 1 K-line count mismatch")
+        _assert(page.bars_for(2, "voltage", 5, 120)[0].latest == 700.0, "cluster 2 data missing")
+        _assert(page.bars_for(1, "voltage", 5, 120)[0].maximum == 602.5, "cluster data should be isolated")
+        current_bar = page.bars_for(1, "current", 5, 120)[0]
+        _assert(
+            current_bar.minimum == -12.5 and current_bar.maximum == 8.0,
+            "signed current K-line mismatch",
+        )
+
+        page.show()
+        page.resize(1366, 768)
+        page.refresh_active_chart(force=True)
+        for _ in range(3):
+            app.processEvents()
+        _assert(page.chart_tabs.width() > 1000, "K-line chart should fill laptop width")
+        _assert(len(page.panels["voltage"].canvas.bars) == 2, "voltage candles were not rendered")
+
+        page.resize(1920, 1080)
+        page.chart_tabs.setCurrentIndex(1)
+        page.refresh_active_chart(force=True)
+        for _ in range(3):
+            app.processEvents()
+        _assert(page.chart_tabs.width() > 1500, "K-line chart should expand at desktop width")
+        _assert(len(page.panels["current"].canvas.bars) == 1, "current candles were not rendered")
+
+        page.pause_checkbox.setChecked(True)
+        paused_count = page.sample_count(1, "current")
+        page.add_sample(1, "current", -3.0, bucket_start + 2.0)
+        _assert(page.sample_count(1, "current") == paused_count + 1, "paused chart should keep collecting data")
+        page.pause_checkbox.setChecked(False)
+        page.set_cluster_context(0, "00")
+        _assert(not page.panels["current"].canvas.bars, "00 cluster should show an empty K-line chart")
+        _assert(page.sample_count(1, "voltage") == len(samples), "00 selection should preserve compiled cluster history")
+    finally:
+        page.close()
+        if created_app:
+            app.quit()
+
+
 def test_dbc_parser():
     from application.dbc_parser import parse_dbc_file
 
@@ -368,6 +440,7 @@ def test_main_window_offscreen_logging():
         original_table_index = getattr(window, "table_index", 0)
         original_signal_ids = tuple(window.realtime_monitor_signal_ids)
         original_query_index = window.realtime_monitor_query_index
+        original_kline_query_index = window.system_kline_query_index
         original_query_data = window.QueryData
         try:
             window.c = SimpleNamespace()
@@ -388,10 +461,21 @@ def test_main_window_offscreen_logging():
                 window.realtime_monitor_query_index == main_module.CAN_REQUEST_BURST_PER_TICK,
                 "realtime monitor query cursor should advance by request burst",
             )
+            window.table_index = window._system_kline_tab_index()
+            window.system_kline_query_index = 0
+            sent_monitor_queries.clear()
+            window.RequestBCUVAR()
+            window.RequestBCUVAR()
+            requested_kline_ids = [query[1][0] | (query[1][1] << 8) for query in sent_monitor_queries]
+            _assert(
+                requested_kline_ids == [main_module.VAR_SYS_VOLT, main_module.VAR_SYS_CURR],
+                "K-line page should alternate total-voltage and current index requests",
+            )
         finally:
             window.QueryData = original_query_data
             window.realtime_monitor_signal_ids = original_signal_ids
             window.realtime_monitor_query_index = original_query_index
+            window.system_kline_query_index = original_kline_query_index
             window.table_index = original_table_index
             window.can_ready = original_can_ready
             window.c = original_c
@@ -435,10 +519,19 @@ def test_main_window_offscreen_logging():
 
             _set_snapshot_value(window.ResDataRec[1], "SOC", "88")
             current_key = window._runtime_log_key(1)
+            current_kline_count = window.S31.sample_count(1, "current")
             window._handle_index_var_response(1, main_module.VAR_SYS_CURR, main_module.to_unsigned_16bit(-125), True)
             _assert(window.ResDataRec[1][current_key] == "-12.5", "index runtime current decode mismatch")
+            _assert(
+                window.S31.sample_count(1, "current") == current_kline_count + 1,
+                "successful current response should append a K-line sample",
+            )
             window._handle_index_var_response(1, main_module.VAR_SYS_CURR, 100, False)
             _assert(window.ResDataRec[1][current_key] == "-12.5", "failed index response should not overwrite runtime data")
+            _assert(
+                window.S31.sample_count(1, "current") == current_kline_count + 1,
+                "failed current response should not append a K-line sample",
+            )
             cluster2_table_index = window._shadow_cluster_tab_index(2)
             window.TW[cluster2_table_index][0].setItem(4, 1, QTableWidgetItem("99"))
 
@@ -485,6 +578,7 @@ def test_main_window_offscreen_logging():
             _assert("实时监控" in tab_names, "realtime monitor tab is missing")
             _assert("DBC解析" in tab_names, "DBC parser tab is missing")
             _assert("单体3D" in tab_names, "cell 3D tab is missing")
+            _assert("总压电流K线" in tab_names, "system voltage/current K-line tab is missing")
             active_cluster = window._active_cluster_index()
             visualization_voltages = [3310 + (index % 7) for index in range(cell_count)]
             visualization_temperatures = [245 + (index % 11) for index in range(temp_count)]
@@ -503,6 +597,28 @@ def test_main_window_offscreen_logging():
             _assert(window.S30.voltage_panel.summary["count"] == 0, "00 cluster should clear voltage heatmap")
             _assert(window.S30.temperature_panel.summary["count"] == 0, "00 cluster should clear temperature heatmap")
             window._set_active_cluster(active_cluster, refresh=True, source="self_test")
+            voltage_kline_count = window.S31.sample_count(active_cluster, "voltage")
+            window._handle_index_var_response(active_cluster, main_module.VAR_SYS_VOLT, 6110, True)
+            _assert(
+                window.S31.sample_count(active_cluster, "voltage") == voltage_kline_count + 1,
+                "system voltage response should append a K-line sample",
+            )
+            _assert(
+                window.S31.bars_for(active_cluster, "voltage")[-1].latest == 611.0,
+                "system voltage K-line scaling mismatch",
+            )
+            window._handle_index_var_response(2, main_module.VAR_SYS_VOLT, 7200, True)
+            _assert(
+                window.S31.bars_for(2, "voltage")[-1].latest == 720.0,
+                "secondary cluster K-line scaling mismatch",
+            )
+            _assert(
+                window.S31.bars_for(active_cluster, "voltage")[-1].latest == 611.0,
+                "secondary cluster K-line data should not leak into the active cluster",
+            )
+            window.tabWidget.setCurrentIndex(window._system_kline_tab_index())
+            window.S31.refresh_active_chart(force=True)
+            _assert(window.S31.panels["voltage"].canvas.bars, "K-line tab should render current cluster history")
             _assert(window.S29.database is not None, "DBC parser page should load default IDC.dbc")
             _assert(window.S29.database.signal_count >= 90, "DBC parser page should expose default DBC signals")
             window.S29.clear_live_values()
@@ -667,6 +783,7 @@ def main():
         test_session_logger_files,
         test_module_cell_grid_module_extrema,
         test_cell_visualization_page,
+        test_system_kline_page,
         test_dbc_parser,
         test_main_window_offscreen_logging,
     ]
