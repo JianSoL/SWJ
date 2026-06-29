@@ -66,7 +66,7 @@ class KLineCanvas(FigureCanvasQTAgg):
             self.main_axes.text(
                 0.5,
                 0.5,
-                "等待当前簇总压/电流索引数据",
+                f"等待当前簇{self.value_name}索引数据",
                 transform=self.main_axes.transAxes,
                 ha="center",
                 va="center",
@@ -280,7 +280,8 @@ class KLinePanel(QWidget):
 class SystemKLinePage(QWidget):
     METRICS = {
         "voltage": {"name": "总压", "unit": "V", "precision": 1},
-        "current": {"name": "电流", "unit": "A", "precision": 1},
+        "hall_current": {"name": "霍尔电流", "unit": "A", "precision": 1},
+        "shunt_current": {"name": "分流器电流", "unit": "A", "precision": 1},
     }
 
     def __init__(self):
@@ -302,7 +303,7 @@ class SystemKLinePage(QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        title = QLabel("总压 / 电流 K 线", self)
+        title = QLabel("总压 / 霍尔电流 / 分流器电流 K 线", self)
         title.setObjectName("pageTitle")
         root.addWidget(title)
 
@@ -333,7 +334,7 @@ class SystemKLinePage(QWidget):
         self.pause_checkbox.setToolTip("暂停画面刷新，后台仍继续采集数据")
         toolbar_row.addWidget(self.pause_checkbox)
         self.clear_button = QPushButton("清空当前簇", self)
-        self.clear_button.setToolTip("清除当前簇的总压和电流趋势缓存")
+        self.clear_button.setToolTip("清除当前簇的总压、霍尔电流和分流器电流趋势缓存")
         toolbar_row.addWidget(self.clear_button)
         root.addLayout(toolbar_row)
 
@@ -427,8 +428,15 @@ class SystemKLinePage(QWidget):
         self.redraw_timer.stop()
         self._redraw_active_chart()
 
+    def _active_metric(self):
+        metric_order = tuple(self.METRICS)
+        index = self.chart_tabs.currentIndex()
+        if index < 0 or index >= len(metric_order):
+            return metric_order[0]
+        return metric_order[index]
+
     def _redraw_active_chart(self):
-        metric = "voltage" if self.chart_tabs.currentIndex() == 0 else "current"
+        metric = self._active_metric()
         cluster_index = self.current_cluster_index or 0
         bars = self.bars_for(cluster_index, metric) if cluster_index > 0 else []
         self.panels[metric].set_bars(bars)
@@ -441,7 +449,7 @@ class SystemKLinePage(QWidget):
         if self.pause_checkbox.isChecked():
             self.status_label.setText("画面已暂停，后台仍在采集当前簇数据。")
             return
-        metric = metric or ("voltage" if self.chart_tabs.currentIndex() == 0 else "current")
+        metric = metric or self._active_metric()
         if bars is None:
             bars = self.bars_for(self.current_cluster_index, metric)
         sample_count = self.sample_count(self.current_cluster_index, metric)

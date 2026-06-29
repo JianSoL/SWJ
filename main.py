@@ -55,7 +55,7 @@ CAN_LOWER_SILENCE_TIMEOUT_S = 3.0
 CAN_SILENT_DIAG_TIMEOUT_S = 0.35
 REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 200
 CELL_PAGE_REFRESH_INTERVAL_S = 0.2
-SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.25
+SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.2
 LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
 RX_STATUS_UI_INTERVAL_S = 0.25
 
@@ -90,7 +90,8 @@ VAR_SYS_MINT_POSI = 338
 VAR_SYS_USER_SET_SOC = 445
 VAR_HALL_CURR = 818
 VAR_SHUNT_CURR = 819
-SYSTEM_KLINE_SHARED_SIGNAL_IDS = (VAR_SYS_VOLT, VAR_SYS_CURR)
+SYSTEM_KLINE_METRICS = ("voltage", "hall_current", "shunt_current")
+SYSTEM_KLINE_SHARED_SIGNAL_IDS = (VAR_SYS_VOLT, VAR_HALL_CURR, VAR_SHUNT_CURR)
 ID_PAR_SYS_START = 0x90400
 PAR_SYS_MODULE_COUNT = ID_PAR_SYS_START + 1
 PAR_SYS_AFE_COUNT = ID_PAR_SYS_START + 2
@@ -156,61 +157,65 @@ REALTIME_MONITOR_SIGNAL_DEFINITIONS = (
     {"key": "hvil_pwm_duty", "data_id": PAR_SYS_OUTPUT_HVIL_DUTY_RATIO, "signed": False},
 )
 
-REALTIME_MONITOR_SIGNAL_IDS = tuple(dict.fromkeys(
-    [definition["data_id"] for definition in REALTIME_MONITOR_SIGNAL_DEFINITIONS]
-    + [
-        VAR_SYS_RUN_STATUS,
-        VAR_SYS_SOC,
-        VAR_SYS_SOH,
-        VAR_SYS_DIS_SOC,
-        VAR_SYS_ANALOG_BAT_VOLT,
-        VAR_SYS_ANALOG_PACK_VOLT,
-        VAR_SYS_DIFF_VOLT,
-        VAR_SYS_DIFF_TEMP,
-        VAR_SYS_CELL_VOLT_MAX,
-        VAR_SYS_MAXV_POSI,
-        VAR_SYS_CELL_VOLT_MIN,
-        VAR_SYS_MINV_POSI,
-        VAR_SYS_CELL_TEMP_MAX,
-        VAR_SYS_MAXT_POSI,
-        VAR_SYS_CELL_TEMP_MIN,
-        VAR_SYS_MINT_POSI,
-        0x252,
-        0x253,
-        0x1FD,
-        0x1FE,
-        0x90801,
-        0x90802,
-        0x1AD,
-        0x1AF,
-        VAR_HALL_CURR,
-        VAR_SHUNT_CURR,
-        0x1C0,
-        0x1C1,
-        0x1C2,
-        0x1C3,
-        0x1C4,
-        0x1C5,
-        0x1C6,
-        0x1C7,
-        0x346,
-        0x347,
-        0x348,
-        0x349,
-        0x34A,
-        0x34B,
-        0x34C,
-        0x34D,
-        0x34E,
-        0x34F,
-        0x354,
-        0x355,
-        0x356,
-        0x357,
-        0x358,
-        0x359,
-    ]
-))
+REALTIME_MONITOR_SIGNAL_IDS = tuple(
+    data_id
+    for data_id in dict.fromkeys(
+        [definition["data_id"] for definition in REALTIME_MONITOR_SIGNAL_DEFINITIONS]
+        + [
+            VAR_SYS_RUN_STATUS,
+            VAR_SYS_SOC,
+            VAR_SYS_SOH,
+            VAR_SYS_DIS_SOC,
+            VAR_SYS_ANALOG_BAT_VOLT,
+            VAR_SYS_ANALOG_PACK_VOLT,
+            VAR_SYS_DIFF_VOLT,
+            VAR_SYS_DIFF_TEMP,
+            VAR_SYS_CELL_VOLT_MAX,
+            VAR_SYS_MAXV_POSI,
+            VAR_SYS_CELL_VOLT_MIN,
+            VAR_SYS_MINV_POSI,
+            VAR_SYS_CELL_TEMP_MAX,
+            VAR_SYS_MAXT_POSI,
+            VAR_SYS_CELL_TEMP_MIN,
+            VAR_SYS_MINT_POSI,
+            0x252,
+            0x253,
+            0x1FD,
+            0x1FE,
+            0x90801,
+            0x90802,
+            0x1AD,
+            0x1AF,
+            VAR_HALL_CURR,
+            VAR_SHUNT_CURR,
+            0x1C0,
+            0x1C1,
+            0x1C2,
+            0x1C3,
+            0x1C4,
+            0x1C5,
+            0x1C6,
+            0x1C7,
+            0x346,
+            0x347,
+            0x348,
+            0x349,
+            0x34A,
+            0x34B,
+            0x34C,
+            0x34D,
+            0x34E,
+            0x34F,
+            0x354,
+            0x355,
+            0x356,
+            0x357,
+            0x358,
+            0x359,
+        ]
+    )
+    if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
+)
 
 INDEX_RUNTIME_RECORD_DEFINITIONS = (
     {"data_id": VAR_SYS_CURR, "record_indices": (1,), "signed": True, "scale": 10},
@@ -337,7 +342,7 @@ class Edit(Ui_Form, QWidget):
     def __init__(self):
         # 继承
         super().__init__()
-        self.trend_store = TrendDataStore()
+        self.trend_store = TrendDataStore(metrics=SYSTEM_KLINE_METRICS)
         # 往空QWidget中放置UI内容
         self.setupUi(self)
         self.S31.set_data_store(self.trend_store)
@@ -1481,8 +1486,11 @@ class Edit(Ui_Form, QWidget):
         if data_id == VAR_SYS_VOLT:
             metric = "voltage"
             value = raw_word / 10.0
-        elif data_id == VAR_SYS_CURR:
-            metric = "current"
+        elif data_id == VAR_HALL_CURR:
+            metric = "hall_current"
+            value = self._signed_u16(raw_word) / 10.0
+        elif data_id == VAR_SHUNT_CURR:
+            metric = "shunt_current"
             value = self._signed_u16(raw_word) / 10.0
         else:
             return

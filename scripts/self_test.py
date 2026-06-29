@@ -308,16 +308,23 @@ def test_system_kline_page():
         page.set_cluster_context(1, "A0")
         for timestamp, value in samples:
             _assert(page.add_sample(1, "voltage", value, timestamp), "voltage sample should be accepted")
-        page.add_sample(1, "current", -12.5, bucket_start + 0.5)
-        page.add_sample(1, "current", 8.0, bucket_start + 1.5)
+        page.add_sample(1, "hall_current", -12.5, bucket_start + 0.5)
+        page.add_sample(1, "hall_current", 8.0, bucket_start + 1.5)
+        page.add_sample(1, "shunt_current", -7.8, bucket_start + 0.8)
+        page.add_sample(1, "shunt_current", 4.2, bucket_start + 1.8)
         page.add_sample(2, "voltage", 700.0, bucket_start + 0.5)
         _assert(len(page.bars_for(1, "voltage", 5, 120)) == 2, "cluster 1 K-line count mismatch")
         _assert(page.bars_for(2, "voltage", 5, 120)[0].latest == 700.0, "cluster 2 data missing")
         _assert(page.bars_for(1, "voltage", 5, 120)[0].maximum == 602.5, "cluster data should be isolated")
-        current_bar = page.bars_for(1, "current", 5, 120)[0]
+        current_bar = page.bars_for(1, "hall_current", 5, 120)[0]
         _assert(
             current_bar.minimum == -12.5 and current_bar.maximum == 8.0,
-            "signed current K-line mismatch",
+            "signed Hall current K-line mismatch",
+        )
+        shunt_bar = page.bars_for(1, "shunt_current", 5, 120)[0]
+        _assert(
+            shunt_bar.minimum == -7.8 and shunt_bar.maximum == 4.2,
+            "signed shunt current K-line mismatch",
         )
 
         page.show()
@@ -350,15 +357,30 @@ def test_system_kline_page():
         for _ in range(3):
             app.processEvents()
         _assert(page.chart_tabs.width() > 1500, "K-line chart should expand at desktop width")
-        _assert(len(page.panels["current"].canvas.bars) == 1, "current candles were not rendered")
+        _assert(len(page.panels["hall_current"].canvas.bars) == 1, "Hall current candles were not rendered")
+
+        page.chart_tabs.setCurrentIndex(2)
+        page.refresh_active_chart(force=True)
+        for _ in range(3):
+            app.processEvents()
+        _assert(
+            len(page.panels["shunt_current"].canvas.bars) == 1,
+            "shunt current candles were not rendered",
+        )
 
         page.pause_checkbox.setChecked(True)
-        paused_count = page.sample_count(1, "current")
-        page.add_sample(1, "current", -3.0, bucket_start + 2.0)
-        _assert(page.sample_count(1, "current") == paused_count + 1, "paused chart should keep collecting data")
+        paused_count = page.sample_count(1, "shunt_current")
+        page.add_sample(1, "shunt_current", -3.0, bucket_start + 2.0)
+        _assert(
+            page.sample_count(1, "shunt_current") == paused_count + 1,
+            "paused chart should keep collecting shunt data",
+        )
         page.pause_checkbox.setChecked(False)
         page.set_cluster_context(0, "00")
-        _assert(not page.panels["current"].canvas.bars, "00 cluster should show an empty K-line chart")
+        _assert(
+            not page.panels["shunt_current"].canvas.bars,
+            "00 cluster should show an empty K-line chart",
+        )
         _assert(
             page.sample_count(1, "voltage") == len(samples) + 9,
             "00 selection should preserve compiled cluster history",
@@ -568,10 +590,13 @@ def test_main_window_offscreen_logging():
             window.RequestBCUVAR()
             window.system_kline_last_request_monotonic = 0.0
             window.RequestBCUVAR()
+            window.system_kline_last_request_monotonic = 0.0
+            window.RequestBCUVAR()
             requested_kline_ids = [query[1][0] | (query[1][1] << 8) for query in sent_monitor_queries]
             _assert(
-                requested_kline_ids == [main_module.VAR_SYS_VOLT, main_module.VAR_SYS_CURR],
-                "background polling should cache voltage/current outside the K-line page",
+                requested_kline_ids
+                == [main_module.VAR_SYS_VOLT, main_module.VAR_HALL_CURR, main_module.VAR_SHUNT_CURR],
+                "background polling should cache voltage and both current sensors outside the K-line page",
             )
             _assert(
                 not set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS).intersection(
@@ -634,18 +659,31 @@ def test_main_window_offscreen_logging():
 
             _set_snapshot_value(window.ResDataRec[1], "SOC", "88")
             current_key = window._runtime_log_key(1)
-            current_kline_count = window.S31.sample_count(1, "current")
-            window._handle_index_var_response(1, main_module.VAR_SYS_CURR, main_module.to_unsigned_16bit(-125), True)
-            _assert(window.ResDataRec[1][current_key] == "-12.5", "index runtime current decode mismatch")
+            current_kline_count = window.S31.sample_count(1, "hall_current")
+            window._handle_index_var_response(1, main_module.VAR_HALL_CURR, main_module.to_unsigned_16bit(-125), True)
+            _assert(window.ResDataRec[1][current_key] == "-12.5", "index runtime Hall current decode mismatch")
             _assert(
-                window.S31.sample_count(1, "current") == current_kline_count + 1,
-                "successful current response should append a K-line sample",
+                window.S31.sample_count(1, "hall_current") == current_kline_count + 1,
+                "successful Hall response should append a K-line sample",
             )
-            window._handle_index_var_response(1, main_module.VAR_SYS_CURR, 100, False)
+            window._handle_index_var_response(1, main_module.VAR_HALL_CURR, 100, False)
             _assert(window.ResDataRec[1][current_key] == "-12.5", "failed index response should not overwrite runtime data")
             _assert(
-                window.S31.sample_count(1, "current") == current_kline_count + 1,
-                "failed current response should not append a K-line sample",
+                window.S31.sample_count(1, "hall_current") == current_kline_count + 1,
+                "failed Hall response should not append a K-line sample",
+            )
+            shunt_key = window._runtime_log_key(14)
+            shunt_kline_count = window.S31.sample_count(1, "shunt_current")
+            window._handle_index_var_response(
+                1,
+                main_module.VAR_SHUNT_CURR,
+                main_module.to_unsigned_16bit(-78),
+                True,
+            )
+            _assert(window.ResDataRec[1][shunt_key] == "-7.8", "index runtime shunt decode mismatch")
+            _assert(
+                window.S31.sample_count(1, "shunt_current") == shunt_kline_count + 1,
+                "successful shunt response should append a K-line sample",
             )
             cluster2_table_index = window._shadow_cluster_tab_index(2)
             window.TW[cluster2_table_index][0].setItem(4, 1, QTableWidgetItem("99"))
@@ -725,6 +763,36 @@ def test_main_window_offscreen_logging():
             _assert(
                 window.S31.bars_for(active_cluster, "voltage")[-1].latest == 611.0,
                 "system voltage K-line scaling mismatch",
+            )
+            hall_kline_count = window.S31.sample_count(active_cluster, "hall_current")
+            window._handle_index_var_response(
+                active_cluster,
+                main_module.VAR_HALL_CURR,
+                main_module.to_unsigned_16bit(-123),
+                True,
+            )
+            _assert(
+                window.S31.sample_count(active_cluster, "hall_current") == hall_kline_count + 1,
+                "Hall current response should append an isolated K-line sample",
+            )
+            _assert(
+                window.S31.bars_for(active_cluster, "hall_current")[-1].latest == -12.3,
+                "Hall current K-line scaling mismatch",
+            )
+            shunt_kline_count = window.S31.sample_count(active_cluster, "shunt_current")
+            window._handle_index_var_response(
+                active_cluster,
+                main_module.VAR_SHUNT_CURR,
+                main_module.to_unsigned_16bit(456),
+                True,
+            )
+            _assert(
+                window.S31.sample_count(active_cluster, "shunt_current") == shunt_kline_count + 1,
+                "shunt current response should append an isolated K-line sample",
+            )
+            _assert(
+                window.S31.bars_for(active_cluster, "shunt_current")[-1].latest == 45.6,
+                "shunt current K-line scaling mismatch",
             )
             window._handle_index_var_response(2, main_module.VAR_SYS_VOLT, 7200, True)
             _assert(

@@ -68,17 +68,17 @@ No actionable P0, P1, or P2 header findings remain.
 ## System K-Line QA
 
 - Source visual truth: `C:\Users\ch\AppData\Local\Temp\codex-clipboard-f63d20c1-1b1d-47da-a570-21a3d7751605.png`
-- Implementation screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_optimized_1366x768.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_optimized_1024x640.png`
-- Target states: total voltage and signed current, populated compiled cluster, 5-second period, 120-bar window
-- Responsive viewports: 1366 x 768 and 1920 x 1080
+- Implementation screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_hall_1366x768.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\system_kline_shunt_1024x768.png`
+- Target states: total voltage, signed Hall current, and signed shunt current; populated compiled cluster; 5-second period; 120-bar window
+- Responsive viewports: 1024 x 768, 1366 x 768, and 1920 x 1080
 
 The implementation carries over the reference's K-line geometry while using BMS sampling terms throughout: period-first value, period maximum, period minimum, latest value, and five-period average. A rise from the period-first value is red and a fall is green. Financial-only close-price, MACD, and trade annotations are intentionally omitted; the lower panel reports CAN sample count per period, which is meaningful for equipment diagnostics.
 
-- Data fidelity: voltage index 13 is scaled to 0.1 V; current index 14 is decoded as signed 16-bit and scaled to 0.1 A.
+- Data fidelity: voltage index 13 is scaled to 0.1 V; Hall-current index 818 and shunt-current index 819 are independently decoded as signed 16-bit values and scaled to 0.1 A, matching the lower-controller variable definitions.
 - Isolation: raw samples and aggregated bars are stored per cluster. Selecting 00 displays an empty state without deleting compiled-cluster history.
-- Controls: 1/5/10/30/60-second periods, 60/120/240-bar windows, pause-with-background-capture, current-cluster clear, pan, zoom, reset, and image export.
-- Refresh behavior: total voltage and current are shared signals polled and cached in the background on every application page. They are removed from page-specific monitor and cluster queues to prevent duplicate requests; all-cluster logging only supplements non-active clusters. Successful responses feed the per-cluster history directly, failed responses are ignored, and visible-canvas redraw is throttled to 320 ms without restarting an active redraw deadline.
-- Layout: native Qt controls stay on one compact row while the chart consumes remaining height. No overlap was found at the tested laptop and desktop sizes.
+- Controls: separate total-voltage, Hall-current, and shunt-current tabs; 1/5/10/30/60-second periods; 60/120/240-bar windows; pause-with-background-capture; current-cluster clear; pan; zoom; reset; and image export.
+- Refresh behavior: total voltage and both current sensors are shared signals polled and cached in the background on every application page. They are removed from page-specific monitor and cluster queues to prevent duplicate requests; all-cluster logging only supplements non-active clusters. Successful responses feed their own per-cluster metric, failed responses are ignored, and visible-canvas redraw is throttled to 320 ms without restarting an active redraw deadline.
+- Layout: native Qt controls stay on one compact row while the chart consumes remaining height. All three metric tabs remain reachable with no overlap at the tested laptop and desktop sizes.
 
 No actionable P0, P1, or P2 K-line findings remain.
 
