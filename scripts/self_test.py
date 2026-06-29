@@ -241,6 +241,24 @@ def test_cell_visualization_page():
             app.processEvents()
         _assert(page.chart_tabs.width() > 1000, "3D chart should fill laptop width")
         _assert(len(page.voltage_panel.canvas.entries) == voltage_count - 1, "voltage bars were not rendered")
+        _assert(
+            page.voltage_panel.view_buttons["perspective"].isChecked(),
+            "perspective view should be selected by default",
+        )
+        _assert(page.voltage_panel.canvas.module_axes.get_visible(), "module profile should be visible")
+        _assert(
+            len(page.voltage_panel.canvas.module_axes.get_yticklabels()) == page.voltage_panel.module_count,
+            "module profile labels mismatch",
+        )
+        page.voltage_panel.view_buttons["top"].click()
+        _assert(page.voltage_panel.canvas.elevation == 72, "top view elevation mismatch")
+        _assert(page.voltage_panel.canvas.azimuth == -90, "top view azimuth mismatch")
+        page.voltage_panel.view_buttons["perspective"].click()
+        _assert(page.voltage_panel.canvas.elevation == 27, "perspective elevation mismatch")
+        page.voltage_panel.average_plane_checkbox.setChecked(False)
+        _assert(not page.voltage_panel.canvas.show_average_plane, "average plane should be hidden")
+        page.voltage_panel.average_plane_checkbox.setChecked(True)
+        _assert(page.voltage_panel.canvas.show_average_plane, "average plane should be restored")
 
         page.resize(1920, 1080)
         for _ in range(3):

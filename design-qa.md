@@ -1,47 +1,51 @@
 # Design QA
 
 - Source visual truth: `C:\Users\ch\AppData\Local\Temp\codex-clipboard-289d3f5e-ba01-4547-943f-5e5e371b6da3.png`
-- Implementation screenshot: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\cell_3d_perspective_1480x840.png`
-- Viewport: 1480 x 840
+- Implementation screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\cell_3d_tech_1480x840.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\cell_3d_tech_1024x768.png`
+- Viewports: 1480 x 840 and 1024 x 768
 - State: compiled cluster, voltage chart selected, populated 6-module data set
 
 **Full-View Comparison Evidence**
 
-- Both views use a white plotting surface, perspective 3D bar matrix, receding grid, low-to-high blue/yellow/red scale, vertical colorbar, and generous inspection space around the chart.
-- The implementation intentionally retains the AIDC application header, current-cluster context, voltage/temperature tabs, statistics, and chart navigation toolbar around the referenced chart treatment.
+- Both views use a perspective 3D bar matrix, receding spatial grid, low-to-high blue/yellow/red scale, vertical colorbar, and generous inspection space around the chart.
+- The implementation strengthens the reference with a dark graphite inspection field, cyan spatial grid, translucent average plane, extrema beacons, live point/delta HUD, and per-module mean/range profile.
+- The AIDC application header, current-cluster context, voltage/temperature tabs, statistics, camera presets, average-plane control, and chart navigation remain available around the visualization.
 
 **Focused Region Comparison Evidence**
 
-- No separate crop was required: at 1480 x 840 the bar faces, perspective grid, three axes, tick labels, colorbar, and plot spacing are readable in the full-view comparison.
+- No separate crop was required: at both tested viewports the bar faces, perspective grid, three axes, tick labels, colorbar, extrema labels, and module profile are readable in the full-view comparison.
 
 **Required Fidelity Surfaces**
 
 - Fonts and typography: AIDC controls retain Microsoft YaHei UI; chart labels prefer Microsoft YaHei/SimHei with DejaVu Sans fallback. Sizes and weights remain legible without crowding.
-- Spacing and layout rhythm: chart occupies the available page height, leaves rotation space, and does not overlap the summary, tabs, axes, colorbar, or toolbar at the target viewport.
-- Colors and visual tokens: chart follows the reference's cool-low/warm-high progression while preserving the application's restrained white and gray surface palette.
+- Spacing and layout rhythm: the main matrix occupies 70% of the plot width and the module profile uses the remaining inspection area. Responsive camera zoom keeps all axis labels visible at 1024 x 768.
+- Colors and visual tokens: the plot uses a graphite field with cyan grid lines and a multi-hue cool-low/warm-high scale. The surrounding application retains its restrained white and gray surface palette.
 - Image quality and asset fidelity: the chart is rendered natively at the current DPI, so bars, grid lines, and labels remain sharp while resizing. No placeholder or approximated raster asset is used.
 - Copy and content: axes use product-specific labels for cell number, module, voltage, and temperature; statistics and units reflect live protocol data.
 
 **Findings**
 
 - No actionable P0, P1, or P2 differences remain.
-- P3: the native Matplotlib navigation toolbar is visible below the chart; this is retained because it provides rotation reset, pan, zoom, and export controls required for the delivered desktop workflow.
+- P3: the native Matplotlib navigation toolbar remains visible as a compact strip below the chart because it provides reset, pan, zoom, and export controls required by the desktop workflow.
 
 **Patches Made Since Previous QA Pass**
 
-- Replaced the interim heatmap with native interactive 3D bar charts.
-- Moved the continuous colorbar to the left to match the reference composition.
-- Added perspective projection with stronger focal depth and a lower oblique camera angle.
-- Enlarged the plot box and preserved the user's camera angle across live data refreshes.
-- Throttled redraws and cancelled pending paint work during shutdown.
+- Added a deep perspective camera with perspective, top, and side presets.
+- Added a dark spatial floor, cyan grid, average plane, extrema markers, and a live summary HUD.
+- Added a per-module mean/range profile so the right side reports module-level distribution instead of remaining empty.
+- Kept rotation, wheel zoom, hover values, pan, reset, and export; camera angle remains stable across live refreshes.
+- Added height-aware camera zoom so the 1024 x 768 layout retains complete axes and labels.
+- Kept the 250 ms visible-page redraw throttle and pending-paint cancellation during shutdown.
 
 **Implementation Checklist**
 
 - [x] Voltage and temperature chart switching
 - [x] Perspective rotation and wheel zoom
+- [x] Perspective, top, and side camera presets
+- [x] Average-plane toggle and module-level distribution profile
 - [x] Live current-cluster data binding
 - [x] Missing-value handling and protocol scaling
-- [x] Responsive 1366 x 768 and 1920 x 1080 rendering
+- [x] Responsive 1024 x 768, 1480 x 840, and 1920 x 1080 rendering
 - [x] Empty and uncompiled-cluster states
 
 ## Header Redesign QA

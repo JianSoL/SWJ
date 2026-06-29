@@ -2,16 +2,19 @@ import math
 import time
 
 import numpy as np
-from matplotlib import cm, colors, rcParams
+from matplotlib import cm, colors, patheffects, rcParams
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import proj3d
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -25,8 +28,17 @@ rcParams["axes.unicode_minus"] = False
 
 BAR_COLORMAP = colors.LinearSegmentedColormap.from_list(
     "aidc_cell_value",
-    ("#3547a8", "#79add2", "#d9f0e3", "#fee08b", "#f46d43", "#a50026"),
+    ("#00a6ff", "#00d4ff", "#00e5a8", "#f2cf5b", "#ff7a45", "#ff3158"),
 )
+
+CHART_BACKGROUND = "#061119"
+PANE_BACKGROUND = (0.035, 0.105, 0.145, 0.96)
+FLOOR_COLOR = "#0a202a"
+GRID_COLOR = (0.12, 0.50, 0.58, 0.42)
+TEXT_PRIMARY = "#d9fbff"
+TEXT_MUTED = "#7db8c4"
+CYAN = "#22d3ee"
+ALERT = "#ff4d6d"
 
 
 def _normalized_values(values, expected_count, scale, zero_is_missing):
@@ -60,7 +72,7 @@ class Bar3DCanvas(FigureCanvasQTAgg):
         zero_is_missing=False,
         parent=None,
     ):
-        self.figure = Figure(figsize=(10, 6), dpi=100, facecolor="#ffffff")
+        self.figure = Figure(figsize=(10, 6), dpi=100, facecolor=CHART_BACKGROUND)
         super().__init__(self.figure)
         self.setParent(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -72,21 +84,27 @@ class Bar3DCanvas(FigureCanvasQTAgg):
         self.precision = int(precision)
         self.zero_is_missing = bool(zero_is_missing)
         self.entries = []
+        self.raw_values = []
         self.axes = None
+        self.module_axes = None
         self.annotation = None
-        self.elevation = 24
-        self.azimuth = -62
+        self.elevation = 27
+        self.azimuth = -55
+        self.focal_length = 0.46
+        self.show_average_plane = True
         self.mpl_connect("motion_notify_event", self._on_mouse_move)
         self.mpl_connect("button_release_event", self._remember_view)
         self.draw_values([])
 
     def draw_values(self, values):
+        self.raw_values = list(values or [])
         expected_count = self.module_count * self.cells_per_module
-        self.entries = _normalized_values(values, expected_count, self.scale, self.zero_is_missing)
+        self.entries = _normalized_values(self.raw_values, expected_count, self.scale, self.zero_is_missing)
         self.figure.clear()
-        self.axes = self.figure.add_subplot(111, projection="3d")
-        self.axes.set_facecolor("#ffffff")
-        self.figure.subplots_adjust(left=0.01, right=0.93, bottom=0.08, top=0.95)
+        self.axes = self.figure.add_axes([0.055, 0.065, 0.70, 0.89], projection="3d")
+        self.module_axes = self.figure.add_axes([0.79, 0.17, 0.19, 0.66])
+        self.axes.set_facecolor(CHART_BACKGROUND)
+        self.module_axes.set_facecolor(CHART_BACKGROUND)
 
         if not self.entries:
             self._configure_axes(0.0, 1.0)
@@ -97,10 +115,21 @@ class Bar3DCanvas(FigureCanvasQTAgg):
                 transform=self.axes.transAxes,
                 ha="center",
                 va="center",
-                color="#7b8797",
+                color=TEXT_MUTED,
                 fontsize=13,
             )
+            self.axes.text2D(
+                0.5,
+                0.43,
+                "NO CELL TELEMETRY",
+                transform=self.axes.transAxes,
+                ha="center",
+                va="center",
+                color="#2d6670",
+                fontsize=8,
+            )
             self.annotation = None
+            self.module_axes.set_visible(False)
             self.draw()
             return
 
@@ -111,60 +140,222 @@ class Bar3DCanvas(FigureCanvasQTAgg):
 
         minimum = float(display_values.min())
         maximum = float(display_values.max())
+        average = float(display_values.mean())
         span = maximum - minimum
-        baseline_margin = max(span * 0.18, 5.0 if self.unit == "mV" else 1.0)
+        baseline_margin = max(span * 0.30, 5.0 if self.unit == "mV" else 1.2)
         baseline = math.floor((minimum - baseline_margin) * 10.0) / 10.0
         heights = np.maximum(display_values - baseline, 0.001)
 
         normalizer = colors.Normalize(vmin=minimum, vmax=maximum if maximum != minimum else minimum + 1.0)
         bar_colors = BAR_COLORMAP(normalizer(display_values))
+        self._draw_floor(baseline)
+        if self.show_average_plane:
+            self._draw_average_plane(average)
         self.axes.bar3d(
-            cell_indexes + 0.1,
-            module_indexes + 0.1,
+            cell_indexes + 0.14,
+            module_indexes + 0.14,
             np.full(len(display_values), baseline),
-            np.full(len(display_values), 0.76),
-            np.full(len(display_values), 0.76),
+            np.full(len(display_values), 0.70),
+            np.full(len(display_values), 0.70),
             heights,
             color=bar_colors,
-            edgecolor="#ffffff",
-            linewidth=0.35,
+            edgecolor="#b8f7ff",
+            linewidth=0.32,
             shade=True,
             zsort="average",
         )
 
-        upper_margin = max(span * 0.16, 4.0 if self.unit == "mV" else 1.0)
+        upper_margin = max(span * 0.24, 4.0 if self.unit == "mV" else 1.0)
         self._configure_axes(baseline, maximum + upper_margin)
+        self._draw_extrema(indexes, display_values, minimum, maximum, upper_margin)
+        self._draw_hud(len(display_values), minimum, maximum, average)
+        self._draw_module_profile(indexes, display_values, normalizer, minimum, maximum)
+        colorbar_axes = self.figure.add_axes([0.025, 0.22, 0.010, 0.56])
         colorbar = self.figure.colorbar(
             cm.ScalarMappable(norm=normalizer, cmap=BAR_COLORMAP),
-            ax=self.axes,
-            shrink=0.63,
-            pad=0.03,
-            aspect=22,
-            location="left",
+            cax=colorbar_axes,
         )
-        colorbar.set_label(f"{self.value_name} ({self.unit})", color="#526173", labelpad=8)
-        colorbar.ax.tick_params(labelsize=8, colors="#526173")
+        colorbar.set_label(f"{self.value_name} ({self.unit})", color=TEXT_MUTED, labelpad=8)
+        colorbar.ax.tick_params(labelsize=8, colors=TEXT_MUTED, length=2)
+        colorbar.outline.set_edgecolor("#245461")
+        colorbar.ax.set_facecolor(CHART_BACKGROUND)
 
         self.annotation = self.axes.annotate(
             "",
             xy=(0, 0),
             xytext=(12, 12),
             textcoords="offset points",
-            bbox={"boxstyle": "round,pad=0.45", "fc": "white", "ec": "#1f66e5", "alpha": 0.96},
-            color="#172033",
+            bbox={"boxstyle": "round,pad=0.45", "fc": "#071923", "ec": CYAN, "alpha": 0.97},
+            color=TEXT_PRIMARY,
             fontsize=9,
             visible=False,
         )
         self.draw()
+
+    def _draw_module_profile(self, indexes, values, normalizer, minimum, maximum):
+        axes = self.module_axes
+        module_stats = []
+        for module_index in range(self.module_count):
+            mask = (indexes // self.cells_per_module) == module_index
+            module_values = values[mask]
+            if len(module_values) == 0:
+                continue
+            module_stats.append(
+                (
+                    module_index,
+                    float(module_values.min()),
+                    float(module_values.max()),
+                    float(module_values.mean()),
+                )
+            )
+        if not module_stats:
+            axes.set_visible(False)
+            return
+
+        axes.set_visible(True)
+        y_values = np.arange(len(module_stats))
+        means = np.asarray([item[3] for item in module_stats])
+        lows = np.asarray([item[1] for item in module_stats])
+        highs = np.asarray([item[2] for item in module_stats])
+        profile_colors = BAR_COLORMAP(normalizer(means))
+        axes.hlines(y_values, lows, highs, color=profile_colors, linewidth=5.0, alpha=0.72)
+        axes.scatter(
+            means,
+            y_values,
+            s=34,
+            color=profile_colors,
+            edgecolor="#d9fbff",
+            linewidth=0.7,
+            zorder=3,
+        )
+        span = max(maximum - minimum, 1.0)
+        axes.set_xlim(minimum - span * 0.18, maximum + span * 0.34)
+        axes.set_ylim(-0.65, len(module_stats) - 0.35)
+        axes.set_yticks(y_values)
+        axes.set_yticklabels([f"M{item[0] + 1}" for item in module_stats])
+        axes.invert_yaxis()
+        axes.set_title("模组均值 / 极差", loc="left", color=TEXT_PRIMARY, fontsize=10, fontweight="bold", pad=12)
+        axes.set_xlabel(self.unit, color=TEXT_MUTED, fontsize=8)
+        axes.tick_params(axis="both", colors=TEXT_MUTED, labelsize=8, length=0)
+        axes.grid(True, axis="x", color="#174653", linewidth=0.65, alpha=0.7)
+        axes.set_axisbelow(True)
+        for spine in axes.spines.values():
+            spine.set_visible(False)
+        for y_value, mean in zip(y_values, means):
+            axes.text(
+                mean + span * 0.035,
+                y_value,
+                f"{mean:.{self.precision}f}",
+                color=TEXT_PRIMARY,
+                fontsize=8,
+                va="center",
+            )
+
+    def _draw_floor(self, baseline):
+        x_grid, y_grid = np.meshgrid(
+            np.arange(self.cells_per_module + 1),
+            np.arange(self.module_count + 1),
+        )
+        z_grid = np.full_like(x_grid, baseline, dtype=float)
+        self.axes.plot_surface(
+            x_grid,
+            y_grid,
+            z_grid,
+            color=FLOOR_COLOR,
+            edgecolor="#174d58",
+            linewidth=0.42,
+            alpha=0.94,
+            antialiased=True,
+            shade=False,
+            zorder=0,
+        )
+        for module_boundary in range(self.module_count + 1):
+            self.axes.plot(
+                [0, self.cells_per_module],
+                [module_boundary, module_boundary],
+                [baseline, baseline],
+                color="#1c6975",
+                linewidth=0.75,
+                alpha=0.72,
+                zorder=1,
+            )
+
+    def _draw_average_plane(self, average):
+        x_grid, y_grid = np.meshgrid(
+            [0, self.cells_per_module],
+            [0, self.module_count],
+        )
+        z_grid = np.full_like(x_grid, average, dtype=float)
+        self.axes.plot_surface(
+            x_grid,
+            y_grid,
+            z_grid,
+            color=CYAN,
+            alpha=0.10,
+            linewidth=0,
+            antialiased=False,
+            shade=False,
+            zorder=1,
+        )
+
+    def _draw_extrema(self, indexes, values, minimum, maximum, upper_margin):
+        extrema = (
+            (int(indexes[int(np.argmin(values))]), minimum, CYAN, "MIN"),
+            (int(indexes[int(np.argmax(values))]), maximum, ALERT, "MAX"),
+        )
+        label_offset = max(upper_margin * 0.16, 0.5)
+        for absolute_index, value, color, label in extrema:
+            module_index = absolute_index // self.cells_per_module
+            cell_index = absolute_index % self.cells_per_module
+            x_value = cell_index + 0.49
+            y_value = module_index + 0.49
+            self.axes.scatter(
+                [x_value],
+                [y_value],
+                [value],
+                s=34,
+                color=color,
+                edgecolor="#ffffff",
+                linewidth=0.65,
+                depthshade=False,
+                zorder=8,
+            )
+            text = self.axes.text(
+                x_value,
+                y_value,
+                value + label_offset,
+                f"{label} {value:.{self.precision}f}",
+                color=color,
+                fontsize=8,
+                fontweight="bold",
+                ha="center",
+                va="bottom",
+                zorder=9,
+            )
+            text.set_path_effects([patheffects.withStroke(linewidth=2.2, foreground=CHART_BACKGROUND)])
+
+    def _draw_hud(self, count, minimum, maximum, average):
+        self.axes.text2D(
+            0.985,
+            0.965,
+            f"LIVE  {count:03d} PTS\nAVG {average:.{self.precision}f}  Δ {maximum - minimum:.{self.precision}f} {self.unit}",
+            transform=self.axes.transAxes,
+            ha="right",
+            va="top",
+            color=TEXT_PRIMARY,
+            fontsize=8,
+            linespacing=1.45,
+            bbox={"boxstyle": "round,pad=0.45", "fc": "#081d27", "ec": "#1c5c67", "alpha": 0.88},
+        )
 
     def _configure_axes(self, z_minimum, z_maximum):
         axes = self.axes
         axes.set_xlim(0, self.cells_per_module)
         axes.set_ylim(0, self.module_count)
         axes.set_zlim(z_minimum, max(z_maximum, z_minimum + 1.0))
-        axes.set_xlabel("单体编号", labelpad=9, color="#344256")
-        axes.set_ylabel("模组", labelpad=9, color="#344256")
-        axes.set_zlabel(f"{self.value_name} ({self.unit})", labelpad=8, color="#344256")
+        axes.set_xlabel("单体编号", labelpad=9, color=TEXT_MUTED)
+        axes.set_ylabel("模组", labelpad=9, color=TEXT_MUTED)
+        axes.set_zlabel(f"{self.value_name} ({self.unit})", labelpad=8, color=TEXT_MUTED)
 
         x_step = 1 if self.cells_per_module <= 16 else max(1, math.ceil(self.cells_per_module / 16))
         x_ticks = np.arange(0, self.cells_per_module, x_step) + 0.5
@@ -172,18 +363,41 @@ class Bar3DCanvas(FigureCanvasQTAgg):
         axes.set_xticklabels([str(index + 1) for index in range(0, self.cells_per_module, x_step)])
         axes.set_yticks(np.arange(self.module_count) + 0.5)
         axes.set_yticklabels([f"M{index + 1}" for index in range(self.module_count)])
-        axes.tick_params(axis="x", labelsize=8, colors="#526173", pad=1)
-        axes.tick_params(axis="y", labelsize=8, colors="#526173", pad=1)
-        axes.tick_params(axis="z", labelsize=8, colors="#526173", pad=2)
+        axes.tick_params(axis="x", labelsize=8, colors=TEXT_MUTED, pad=1)
+        axes.tick_params(axis="y", labelsize=8, colors=TEXT_MUTED, pad=1)
+        axes.tick_params(axis="z", labelsize=8, colors=TEXT_MUTED, pad=2)
         axes.grid(True)
-        axes.set_proj_type("persp", focal_length=0.68)
+        axes.set_proj_type("persp", focal_length=self.focal_length)
         for axis in (axes.xaxis, axes.yaxis, axes.zaxis):
-            axis.pane.set_facecolor((0.98, 0.99, 1.0, 1.0))
-            axis.pane.set_edgecolor("#cbd5e1")
-            axis._axinfo["grid"]["color"] = (0.78, 0.82, 0.87, 0.78)
-            axis._axinfo["grid"]["linewidth"] = 0.65
+            axis.pane.set_facecolor(PANE_BACKGROUND)
+            axis.pane.set_edgecolor("#174653")
+            axis.line.set_color("#2a6975")
+            axis._axinfo["grid"]["color"] = GRID_COLOR
+            axis._axinfo["grid"]["linewidth"] = 0.62
         axes.view_init(elev=self.elevation, azim=self.azimuth)
-        axes.set_box_aspect((3.2, 1.2, 1.25), zoom=1.22)
+        responsive_zoom = max(1.05, min(1.25, self.height() / 420.0 * 1.25))
+        axes.set_box_aspect((2.9, 1.5, 1.35), zoom=responsive_zoom)
+
+    def set_view_preset(self, preset):
+        presets = {
+            "perspective": (27, -55, 0.46),
+            "top": (72, -90, 0.62),
+            "side": (20, -18, 0.58),
+        }
+        if preset not in presets:
+            return
+        self.elevation, self.azimuth, self.focal_length = presets[preset]
+        if self.axes is not None:
+            self.axes.set_proj_type("persp", focal_length=self.focal_length)
+            self.axes.view_init(elev=self.elevation, azim=self.azimuth)
+            self.draw_idle()
+
+    def set_average_plane(self, enabled):
+        enabled = bool(enabled)
+        if enabled == self.show_average_plane:
+            return
+        self.show_average_plane = enabled
+        self.draw_values(self.raw_values)
 
     def _remember_view(self, _event):
         if self.axes is not None:
@@ -287,9 +501,51 @@ class ChartPanel(QWidget):
             zero_is_missing=zero_is_missing,
             parent=self,
         )
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(0)
+        controls.addStretch(1)
+        view_caption = QLabel("视角", self)
+        view_caption.setObjectName("sectionHint")
+        controls.addWidget(view_caption)
+        controls.addSpacing(8)
+        self.view_group = QButtonGroup(self)
+        self.view_group.setExclusive(True)
+        self.view_buttons = {}
+        for preset, text in (("perspective", "透视"), ("top", "俯视"), ("side", "侧视")):
+            button = QToolButton(self)
+            button.setText(text)
+            button.setCheckable(True)
+            button.setAutoRaise(False)
+            button.setProperty("viewSegment", True)
+            button.setToolTip(f"切换到{text}视角")
+            button.clicked.connect(lambda _checked, preset=preset: self.canvas.set_view_preset(preset))
+            self.view_group.addButton(button)
+            self.view_buttons[preset] = button
+            controls.addWidget(button)
+        self.view_buttons["perspective"].setChecked(True)
+        controls.addSpacing(12)
+        self.average_plane_checkbox = QCheckBox("平均面", self)
+        self.average_plane_checkbox.setChecked(True)
+        self.average_plane_checkbox.setToolTip("显示当前数据平均值参考面")
+        self.average_plane_checkbox.toggled.connect(self.canvas.set_average_plane)
+        controls.addWidget(self.average_plane_checkbox)
+        layout.addLayout(controls)
+
         layout.addWidget(self.canvas, 1)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        layout.addWidget(self.toolbar)
+        self.toolbar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.toolbar.setStyleSheet(
+            "QToolBar { background: #f5f8fb; border: 1px solid #cbd7e4; padding: 2px; }"
+            "QToolButton { background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 3px; }"
+            "QToolButton:hover { background: #e4f4f7; border-color: #83c7d2; }"
+        )
+        layout.addWidget(self.toolbar, 0, Qt.AlignmentFlag.AlignLeft)
+        self.setStyleSheet(
+            "QToolButton[viewSegment='true'] { background: #f6f8fb; color: #526173; border: 1px solid #c9d4e2; padding: 4px 10px; }"
+            "QToolButton[viewSegment='true']:checked { background: #0a2631; color: #7ff4ff; border-color: #20b9cf; }"
+        )
         self.set_values([], redraw=False)
 
     def set_values(self, values, redraw=True):
