@@ -30,6 +30,8 @@ a = Analysis(
         ('UI/style.qss', 'UI'),
         ('alarm.wav', '.'),
         ('IDC.dbc', '.'),
+        ('resources/index_catalog.json', 'resources'),
+        ('resources/index_custom_template.yaml', 'resources'),
     ],
     hiddenimports=[],
     hookspath=[],

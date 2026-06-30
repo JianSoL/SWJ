@@ -6,6 +6,7 @@
 - `main.py`：协议调度、簇路由、链路状态和页面协调，不持有图表实现细节。
 - `application/trend_store.py`：按簇保存总压/电流趋势，增量生成多个时间周期，容量固定。
 - `application/dbc_parser.py`：DBC文件模型和纯数据解析。
+- `application/index_catalog.py`：解析固件索引、动态展开模组/单体位置并叠加用户自定义配置。
 - `session_logger.py`：CSV滚动文件、缓冲写入和统一刷盘。
 - `UI/`：展示缓存快照；隐藏页面不执行高频表格或图表重绘。
 
@@ -39,5 +40,20 @@
 - 新高频页面必须区分“数据持续缓存”和“可见时刷新”。
 - 新定时任务应使用现有链路静默降频和请求节流规则。
 - 所有簇级状态必须以簇索引为一级键，禁止复用当前簇的全局显示状态。
+
+## 索引目录
+
+- 基础目录由 `scripts/generate_index_catalog.py` 从下位机 `Var_Macro.h`、`Var_Manage.h`、`Par_Macro.h` 和 `Par_Manage.h` 生成。
+- 发布资源 `resources/index_catalog.json` 保存源码哈希、索引布局常量、类型、单位、缩放、说明和源码位置。
+- 主机控制页可按名称、宏名、十进制或十六进制搜索，并将选择结果填入当前请求行。
+- 用户可在索引浏览器导入 JSON/YAML 配置。配置规范参见 `resources/index_custom_template.yaml`。
+- 导入配置持久化到程序目录 `index_custom.yaml`，该文件不进入Git，升级基础目录时不会覆盖用户配置。
+- 自定义项可覆盖名称、说明、符号、S16/U16、缩放、偏移、单位、枚举映射和权限，也可以定义固件目录之外的厂内索引。
+
+重新生成目录：
+
+```powershell
+python scripts/generate_index_catalog.py --source-root "D:\DDSAVE\工作\IDC\下位机\01.bcu_app_01v01" --output resources\index_catalog.json
+```
 
 发布前运行 `python scripts/release_check.py`。该命令同时执行功能回归和无硬件负载验证。

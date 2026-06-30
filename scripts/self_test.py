@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import sys
 import tempfile
@@ -415,6 +416,109 @@ def test_dbc_parser():
     }
     _assert(decoded_values["Chargeable_battery_KWH_UP"] == 10, "DBC live decode value mismatch")
     _assert(decoded_values["Current_Discharging_KWH_UP"] == 40, "DBC live decode high word mismatch")
+
+
+def test_index_catalog_and_browser():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from PyQt6.QtWidgets import QApplication
+
+    from application.index_catalog import IndexCatalog
+    from UI.T24 import HostControlPage
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    with tempfile.TemporaryDirectory(prefix="aidc_index_catalog_test_") as temp_dir:
+        custom_path = Path(temp_dir) / "index_custom.yaml"
+        catalog = IndexCatalog.from_json(
+            PROJECT_DIR / "resources" / "index_catalog.json",
+            custom_path=custom_path,
+        )
+        runtime_config = {
+            "BCU_NUM": 2,
+            "LECU_NUM": 6,
+            "CELL_NUM": 16,
+            "Alarm_name_key": {"001": "单体电压过高"},
+        }
+
+        hall = catalog.resolve(818, runtime_config)
+        _assert(hall.symbol == "VAR_HALL_CURR", "Hall index symbol mismatch")
+        _assert(hall.signed and hall.scale == 0.1, "Hall index type or scale mismatch")
+        _assert(hall.format_physical_value(0xFF85) == "-12.3 A", "Hall physical decode mismatch")
+        shunt = catalog.resolve(819, runtime_config)
+        _assert("分流器" in shunt.name, "shunt index description mismatch")
+        precharge = catalog.resolve(0x90479, runtime_config)
+        _assert(precharge.symbol == "PAR_SYS_PRECHARGE_MODE", "parameter index resolution mismatch")
+        _assert(len(catalog.iter_entries(runtime_config)) > 4000, "runtime index catalog was not expanded")
+
+        source_config = Path(temp_dir) / "factory_indexes.json"
+        source_config.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": [
+                        {
+                            "id": "0x332",
+                            "name": "厂内霍尔电流",
+                            "description": "覆盖固件目录中的显示名称与缩放。",
+                            "signed": True,
+                            "scale": 0.01,
+                            "display_unit": "A",
+                            "access": "read_only",
+                        },
+                        {
+                            "id": "0x8FFFF",
+                            "name": "厂内扩展状态",
+                            "symbol": "CUSTOM_FACTORY_STATE",
+                            "category": "custom",
+                            "category_label": "自定义",
+                            "value_map": {"0": "关闭", "1": "开启"},
+                            "access": "read_only",
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        _assert(catalog.import_custom_config(source_config) == 2, "custom index import count mismatch")
+        _assert(custom_path.exists(), "custom index config should persist beside the application")
+        custom_hall = catalog.resolve(818, runtime_config)
+        _assert(custom_hall.custom and custom_hall.name == "厂内霍尔电流", "custom override mismatch")
+        _assert(custom_hall.format_physical_value(0xFF85) == "-1.23 A", "custom scaling mismatch")
+        custom_state = catalog.resolve(0x8FFFF, runtime_config)
+        _assert(custom_state.known and custom_state.custom, "new custom index was not resolved")
+        _assert(custom_state.format_physical_value(1) == "开启", "custom value map mismatch")
+
+        page = HostControlPage(catalog, runtime_config)
+        try:
+            page.show()
+            page.index_edits[0].setText("0x332")
+            page.index_edits[0].setFocus()
+            page.set_request_value(0, 818, str(0xFF85))
+            for _ in range(3):
+                app.processEvents()
+            _assert("厂内霍尔" in page.index_name_labels[0].text(), "index row name was not resolved")
+            _assert("-1.23 A" in page.index_detail_value.text(), "index detail physical value mismatch")
+
+            dialog = page.create_index_browser_dialog()
+            try:
+                dialog.search_edit.setText("厂内扩展状态")
+                app.processEvents()
+                _assert(dialog.proxy_model.rowCount() == 1, "custom browser search mismatch")
+                _assert(dialog.clear_custom_button.isEnabled(), "custom clear action should be enabled")
+                dialog.clear_custom_config()
+                _assert(catalog.custom_count == 0, "custom index config should clear")
+                _assert(catalog.resolve(818, runtime_config).name != "厂内霍尔电流", "base catalog should restore")
+            finally:
+                dialog.close()
+        finally:
+            page.close()
+        template_path = Path(temp_dir) / "exported_template.yaml"
+        catalog.export_custom_template(template_path)
+        _assert(template_path.exists(), "custom template export failed")
+    if created_app:
+        app.quit()
 
 
 def test_main_window_offscreen_logging():
@@ -983,6 +1087,7 @@ def main():
         test_cell_visualization_page,
         test_system_kline_page,
         test_dbc_parser,
+        test_index_catalog_and_browser,
         test_main_window_offscreen_logging,
     ]
     failures = []

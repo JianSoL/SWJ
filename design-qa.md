@@ -91,4 +91,20 @@ No actionable P0, P1, or P2 K-line findings remain.
 - Logging: CAN rows are buffered and flushed every 128 rows or 0.5 s; snapshot cycles and shutdown force a flush.
 - Multi-cluster parsing: addressed frames route directly by address byte; only non-addressed or broadcast frames use the compatibility fallback scan.
 
+## Firmware Index Browser QA
+
+- Reference screenshots: `D:\DDSAVE\工作\大储\上位机\DCBMS\build\qa\index-control-1366x768.png` and `D:\DDSAVE\工作\大储\上位机\DCBMS\build\qa\index-browser-1180x720.png`
+- AIDC screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\index_control_aidc_1366x768.png`, `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\index_control_aidc_1024x768.png`, and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\index_browser_aidc_1180x720.png`
+- Tested viewports: 1024 x 768, 1180 x 720, and 1366 x 768
+
+The AIDC implementation follows the DCBMS host-control workflow while using the AIDC lower-controller protocol as the source of truth. The generated base catalog contains 1,795 firmware definitions and expands to 5,018 browsable entries under the current module, cell, temperature, and alarm configuration.
+
+- Discovery: search supports Chinese names, C symbols, decimal IDs, and hexadecimal IDs; categories can be filtered independently.
+- Read context: each host-control row shows the resolved name and HEX ID. The focused row shows symbol, category, signedness, unit, access, firmware source line, raw value, and decoded physical value.
+- Custom configuration: JSON and YAML import, YAML/JSON template export, clear, persistent EXE-side storage, base-entry overrides, and new read-only custom IDs are available from the browser toolbar.
+- Protocol fidelity: Hall current 818 and shunt current 819 decode as signed 16-bit values at 0.1 A; system voltage 13 and system parameters retain their firmware scaling and access metadata.
+- Responsive layout: the 1366 px view presents all three control columns. At 1024 px the content keeps readable field widths and uses horizontal scrolling instead of clipping IDs or compressing controls. The 1180 px browser toolbar and detail panel remain fully visible without overlap.
+
+No actionable P0, P1, or P2 index-browser findings remain.
+
 final result: passed

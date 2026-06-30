@@ -15,4 +15,5 @@ dist.zip
 distV*.zip
 
 *.log
+index_custom.yaml
 ~$*

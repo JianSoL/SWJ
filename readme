@@ -48,6 +48,22 @@ Copy-Item -LiteralPath config.json -Destination dist\config.json -Force
 - `IDC.dbc`
 - `UI\release_theme.qss`
 - `UI\style.qss`
+- `resources\index_catalog.json`
+- `resources\index_custom_template.yaml`
+
+## 索引浏览器与自定义配置
+
+在“主机控制”页面点击“浏览索引”，可按中文名称、C 符号名、十进制索引或十六进制索引搜索。选中后可直接填入当前请求行。
+
+浏览器支持导入 JSON/YAML 自定义配置，可覆盖名称、描述、有符号类型、比例、偏移、单位、访问权限和枚举映射，也可增加自定义索引。默认新增项为只读，需要写入时必须显式设置 `access: read_write`。
+
+导入后的有效配置保存在 exe 同目录：
+
+```text
+D:\DDSAVE\工作\AIDCSWJ\dist\index_custom.yaml
+```
+
+可从浏览器点击“导出模板”获得完整字段示例；点击“清除自定义”可恢复使用内置的固件索引目录。
 
 ## 启动验证
 

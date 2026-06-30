@@ -1,0 +1,30 @@
+version: 1
+entries:
+  - id: 0x332
+    name: 霍尔电流
+    symbol: VAR_HALL_CURR
+    description: 自定义名称、缩放或枚举说明会覆盖固件目录中的同一索引。
+    category: custom
+    category_label: 自定义
+    signed: true
+    scale: 0.1
+    value_offset: 0
+    display_unit: A
+    access: read_only
+    value_map: {}
+    enabled: true
+  - id: 0x8FFFF
+    name: 厂内扩展索引示例
+    symbol: CUSTOM_FACTORY_INDEX
+    description: 新增索引默认只读；确认下位机协议后再改为 read_write。
+    category: custom
+    category_label: 自定义
+    signed: false
+    scale: 1
+    value_offset: 0
+    display_unit: ""
+    access: read_only
+    value_map:
+      "0": 关闭
+      "1": 开启
+    enabled: false
