@@ -521,6 +521,94 @@ def test_index_catalog_and_browser():
         app.quit()
 
 
+def test_power_diagnostics():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from PyQt6.QtWidgets import QApplication
+
+    from application.power_diagnostics import PowerDiagnosticAnalyzer
+    from UI.T39 import PowerDiagnosticPage
+
+    raw = {
+        12: 2,
+        23: 4,
+        28: 0xA0,
+        39: 0xFFFF,
+        91: 6000,
+        92: 5950,
+        276: 0,
+        280: 0,
+        289: 0xAAAA,
+        290: 0,
+        296: 0,
+        404: 1,
+        617: 10,
+        904: 1,
+        0x83001: 0,
+        0x83002: 0,
+        0x83004: 0,
+        0x90479: 50,
+        0x9047A: 15,
+        0x9047C: 2,
+        0x9047D: 60,
+    }
+    for number in range(1, 11):
+        raw[47 + number] = 0
+        raw[57 + number] = 0
+
+    analyzer = PowerDiagnosticAnalyzer(has_neutral=False)
+    report = analyzer.analyze(raw)
+    _assert(report["summary_status"] == "ok", "valid power-on conditions should pass")
+    _assert(report["blocked_count"] == 0, "valid diagnostic should have no blocker")
+
+    current_fault = dict(raw)
+    current_fault[290] = 3
+    fault_report = analyzer.analyze(current_fault)
+    _assert(fault_report["summary_status"] == "blocked", "current sensor fault should block")
+    _assert("电流传感器" in fault_report["summary_title"], "primary blocker mismatch")
+
+    precharge_fault = dict(raw)
+    precharge_fault[92] = 4000
+    precharge_report = analyzer.analyze(precharge_fault)
+    _assert(
+        any(item["category"] == "预充" and item["status"] == "blocked" for item in precharge_report["conditions"]),
+        "precharge voltage mismatch should block",
+    )
+
+    abnormal_values = dict(raw)
+    abnormal_values[276] = 0x08
+    abnormal_event = analyzer.build_transition_event(4, 10, abnormal_values)
+    _assert(abnormal_event["type"] == "异常下电", "cutoff transition should be abnormal")
+    _assert("严重告警" in abnormal_event["cause"], "abnormal cause mismatch")
+    requested_values = dict(raw)
+    requested_values[0x83002] = 2
+    requested_event = analyzer.build_transition_event(5, 2, requested_values)
+    _assert(requested_event["type"] == "正常请求下电", "VMS open request should be normal")
+
+    neutral_values = dict(raw)
+    neutral_values.update({894: 0, 895: 0, 900: 3000, 901: 3000, 902: 2980, 903: 2980, 0x8301B: 0, 0x8301C: 0})
+    neutral_report = PowerDiagnosticAnalyzer(has_neutral=True).analyze(neutral_values)
+    _assert(
+        len([item for item in neutral_report["conditions"] if item["category"] == "预充"]) == 2,
+        "neutral mode should diagnose both half-clusters",
+    )
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    page = PowerDiagnosticPage()
+    try:
+        page.set_cluster_context(1, "A0")
+        page.update_report(fault_report, [abnormal_event])
+        app.processEvents()
+        _assert(page.conditions_table.rowCount() == len(fault_report["conditions"]), "diagnostic table mismatch")
+        _assert(page.events_table.rowCount() == 1, "shutdown event table mismatch")
+        _assert("无法上电" in page.summary_banner.text(), "diagnostic summary was not rendered")
+    finally:
+        page.close()
+    if created_app:
+        app.quit()
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -666,6 +754,8 @@ def test_main_window_offscreen_logging():
         original_query_index = window.realtime_monitor_query_index
         original_kline_query_index = window.system_kline_query_index
         original_kline_request_time = window.system_kline_last_request_monotonic
+        original_diagnostic_query_index = window.power_diagnostic_query_index
+        original_diagnostic_request_time = window.power_diagnostic_last_request_monotonic
         original_query_data = window.QueryData
         try:
             window.c = SimpleNamespace()
@@ -676,6 +766,7 @@ def test_main_window_offscreen_logging():
             window.realtime_monitor_signal_ids = (101, 102, 103, 104)
             window.realtime_monitor_query_index = 0
             window.system_kline_last_request_monotonic = time.monotonic()
+            window.power_diagnostic_last_request_monotonic = time.monotonic()
             sent_monitor_queries = []
             window.QueryData = lambda cluster_index, data: sent_monitor_queries.append((cluster_index, list(data)))
             window.RequestBCUVAR()
@@ -714,16 +805,37 @@ def test_main_window_offscreen_logging():
                 ),
                 "cluster page queue should not duplicate shared trend requests",
             )
+            sent_monitor_queries.clear()
+            window.power_diagnostic_query_index = 0
+            window._request_power_diagnostic_background(force=True)
+            _assert(len(sent_monitor_queries) == 1, "diagnostic background poll should be non-blocking")
+            requested_diagnostic_id = sum(
+                sent_monitor_queries[0][1][offset] << (8 * offset) for offset in range(4)
+            )
+            _assert(
+                requested_diagnostic_id == main_module.VAR_SYS_RUN_STATUS,
+                "diagnostic poll should prioritize the run-state index",
+            )
         finally:
             window.QueryData = original_query_data
             window.realtime_monitor_signal_ids = original_signal_ids
             window.realtime_monitor_query_index = original_query_index
             window.system_kline_query_index = original_kline_query_index
             window.system_kline_last_request_monotonic = original_kline_request_time
+            window.power_diagnostic_query_index = original_diagnostic_query_index
+            window.power_diagnostic_last_request_monotonic = original_diagnostic_request_time
             window.table_index = original_table_index
             window.can_ready = original_can_ready
             window.c = original_c
             window._set_active_cluster(original_active_cluster, refresh=False, source="self_test")
+
+        window._start_power_alarm_flash()
+        app.processEvents()
+        _assert(not window.power_alarm_overlay.isHidden(), "power alarm should cover the full window")
+        _assert(window.power_alarm_flash_timer.isActive(), "power alarm flash timer should run")
+        _assert(window.power_alarm_overlay.geometry() == window.rect(), "power alarm overlay geometry mismatch")
+        window.power_alarm_flash_timer.stop()
+        window.power_alarm_overlay.hide()
 
         window._cache_host_control_snapshot(1, {"work_mode": main_module.WORK_MODE_GZ_TEST}, merge=False)
         window._cache_host_control_snapshot(2, {"work_mode": main_module.WORK_MODE_NORMAL}, merge=False)
@@ -1088,6 +1200,7 @@ def main():
         test_system_kline_page,
         test_dbc_parser,
         test_index_catalog_and_browser,
+        test_power_diagnostics,
         test_main_window_offscreen_logging,
     ]
     failures = []

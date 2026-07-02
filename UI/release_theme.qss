@@ -117,6 +117,60 @@ QLabel#statusPill[status="danger"] {
     border-color: #f4b3ad;
 }
 
+QLabel#diagnosticBanner {
+    background: #f4f7fb;
+    border: 1px solid #d4deea;
+    border-left: 4px solid #8090a4;
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: #304154;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+QLabel#diagnosticBanner[severity="ok"] {
+    color: #0f6b3d;
+    background: #eaf8f0;
+    border-color: #a7dfbd;
+    border-left-color: #16844a;
+}
+
+QLabel#diagnosticBanner[severity="blocked"] {
+    color: #b42318;
+    background: #fff0ef;
+    border-color: #f4b3ad;
+    border-left-color: #d92d20;
+}
+
+QLabel#diagnosticBanner[severity="warning"] {
+    color: #9a4f00;
+    background: #fff4df;
+    border-color: #f5cf90;
+    border-left-color: #d97706;
+}
+
+QFrame#diagnosticMetricBand {
+    background: #ffffff;
+    border: 1px solid #dbe3ee;
+    border-radius: 6px;
+}
+
+QLabel#diagnosticMetricValue {
+    color: #101828;
+    background: transparent;
+    border: none;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+QLabel#diagnosticMetricValue[severity="ok"] {
+    color: #0f6b3d;
+}
+
+QLabel#diagnosticMetricValue[severity="danger"] {
+    color: #b42318;
+}
+
 QPushButton {
     background: #ffffff;
     color: #152238;

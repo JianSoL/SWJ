@@ -35,6 +35,7 @@ from .T35 import ActiveAlarmPage as UI35
 from .T36 import DbcParsePage as UI36
 from .T37 import CellVisualizationPage as UI37
 from .T38 import SystemKLinePage as UI38
+from .T39 import PowerDiagnosticPage as UI39
 from .conf import config
 from .responsive import FlowLayout
 
@@ -198,7 +199,7 @@ class Ui_Form(object):
         Form.setStyleSheet(stylesheet)
 
 
-        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+13)]
+        self.tab = [QtWidgets.QWidget() for i in range(0,CU_NUM+14)]
         self.TW = [[QtWidgets.QTableWidget(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
         self.TW = [list(row) for row in zip(*self.TW)]#转置
         self.label = [[QtWidgets.QLabel(parent=self.tab[i]) for i in range(0,CU_NUM)] for j in range(0,3)]
@@ -222,6 +223,7 @@ class Ui_Form(object):
         self.S29 = UI36()
         self.S30 = UI37()
         self.S31 = UI38()
+        self.S32 = UI39()
 
         layout = QVBoxLayout(self.tab[CU_NUM+4])
         layout.addWidget(self.S28)
@@ -265,6 +267,9 @@ class Ui_Form(object):
 
         layout = QVBoxLayout(self.tab[CU_NUM+12])
         layout.addWidget(self.S31)
+
+        layout = QVBoxLayout(self.tab[CU_NUM+13])
+        layout.addWidget(self.S32)
 
 
 
@@ -331,7 +336,7 @@ class Ui_Form(object):
 
         self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
 
-        for i in range(0,CU_NUM+13):
+        for i in range(0,CU_NUM+14):
             self.tabWidget.addTab(self.tab[i], "")
         if hasattr(self.tabWidget.tabBar(), "setTabVisible"):
             self.tabWidget.tabBar().setTabVisible(0, False)
@@ -394,6 +399,7 @@ class Ui_Form(object):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+10]), "DBC解析")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+11]), "单体3D")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+12]), "总压电流K线")
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab[CU_NUM+13]), "上下电诊断")
         #Form.setWindowTitle(_translate("Form", "Form"))
 
 

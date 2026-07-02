@@ -22,6 +22,12 @@ from application.configuration import (
     save_can_board_config,
 )
 from application.trend_store import TrendDataStore
+from application.power_diagnostics import (
+    POWER_DIAGNOSTIC_CRITICAL_SIGNAL_IDS,
+    POWER_DIAGNOSTIC_SIGNAL_IDS,
+    POWER_DIAGNOSTIC_STATIC_SIGNAL_IDS,
+    PowerDiagnosticAnalyzer,
+)
 from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
@@ -58,6 +64,9 @@ CELL_PAGE_REFRESH_INTERVAL_S = 0.2
 SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.2
 LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
 RX_STATUS_UI_INTERVAL_S = 0.25
+POWER_DIAGNOSTIC_VISIBLE_REQUEST_INTERVAL_S = 0.05
+POWER_DIAGNOSTIC_CRITICAL_REQUEST_INTERVAL_S = 0.4
+POWER_DIAGNOSTIC_STATIC_REQUEST_INTERVAL_S = 2.0
 
 CTRL_WORK_MODE = 0x01
 CTRL_CHNNEL = 0x02
@@ -362,6 +371,67 @@ class Edit(Ui_Form, QWidget):
             print(f"load release theme failed: {exc}")
 
 
+    def _setup_power_alarm_flash(self):
+        self.power_alarm_overlay = QtWidgets.QFrame(self)
+        self.power_alarm_overlay.setObjectName("powerAlarmOverlay")
+        self.power_alarm_overlay.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        self.power_alarm_overlay.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_StyledBackground,
+            True,
+        )
+        self.power_alarm_overlay.setStyleSheet(
+            "QFrame#powerAlarmOverlay {"
+            "background-color: rgba(217, 45, 32, 58);"
+            "border: 5px solid #d92d20;"
+            "}"
+        )
+        self.power_alarm_overlay.setGeometry(self.rect())
+        self.power_alarm_overlay.hide()
+        self.power_alarm_flash_remaining = 0
+        self.power_alarm_flash_timer = QTimer(self)
+        self.power_alarm_flash_timer.setInterval(240)
+        self.power_alarm_flash_timer.timeout.connect(self._toggle_power_alarm_flash)
+
+
+    def _start_power_alarm_flash(self):
+        overlay = getattr(self, "power_alarm_overlay", None)
+        timer = getattr(self, "power_alarm_flash_timer", None)
+        if overlay is None or timer is None:
+            return
+        self.power_alarm_flash_remaining = 6
+        overlay.setGeometry(self.rect())
+        overlay.show()
+        overlay.raise_()
+        if not timer.isActive():
+            timer.start()
+
+
+    def _toggle_power_alarm_flash(self):
+        overlay = getattr(self, "power_alarm_overlay", None)
+        timer = getattr(self, "power_alarm_flash_timer", None)
+        if overlay is None or timer is None:
+            return
+        remaining = int(getattr(self, "power_alarm_flash_remaining", 0))
+        if remaining <= 0:
+            timer.stop()
+            overlay.hide()
+            return
+        overlay.setVisible(not overlay.isVisible())
+        if overlay.isVisible():
+            overlay.raise_()
+        self.power_alarm_flash_remaining = remaining - 1
+
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        overlay = getattr(self, "power_alarm_overlay", None)
+        if overlay is not None:
+            overlay.setGeometry(self.rect())
+
+
     def _add_command_caption(self, text, layout=None):
         target_layout = layout or self.product_command_layout
         label = QLabel(text, target_layout.parentWidget() or self.product_command_bar)
@@ -582,6 +652,10 @@ class Edit(Ui_Form, QWidget):
 
     def _system_kline_tab_index(self):
         return config["BCU_NUM"] + 14
+
+
+    def _power_diagnostic_tab_index(self):
+        return config["BCU_NUM"] + 15
 
 
     def _alarm_tab_index(self):
@@ -894,6 +968,10 @@ class Edit(Ui_Form, QWidget):
             if hasattr(self, "S30"):
                 self.S30.clear_values()
                 self.S30.set_status_text("当前选择 00（未编制），不会显示单体数据。")
+            if hasattr(self, "S32"):
+                self.S32.clear_values()
+                self.S32.set_cluster_context(0, "00")
+                self.S32.set_status_text("当前选择 00（未编制），不会请求上下电诊断数据。")
             return
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
@@ -905,6 +983,8 @@ class Edit(Ui_Form, QWidget):
         if hasattr(self, "S28"):
             self.S28.clear_active_alarm_records()
             self.S28.set_status_text(f"已切换到 {self._cluster_display_name(self.selected_cluster_index, self.selected_cluster_address)}。")
+        if hasattr(self, "S32"):
+            self._refresh_power_diagnostic_page()
         self._refresh_cell_visualization_page()
         if getattr(self, "table_index", None) == self._alarm_tab_index() and source != "alarm_page":
             self.S21.clear_cached_values()
@@ -1468,6 +1548,7 @@ class Edit(Ui_Form, QWidget):
         self._cache_realtime_monitor_index_value(cluster_index, data_id, raw_word)
         self._cache_runtime_record_index_value(cluster_index, data_id, raw_word)
         self._cache_system_kline_index_value(cluster_index, data_id, raw_word)
+        self._cache_power_diagnostic_index_value(cluster_index, data_id, raw_word)
 
 
     def _cache_system_kline_index_value(self, cluster_index, data_id, raw_word):
@@ -2115,6 +2196,162 @@ class Edit(Ui_Form, QWidget):
             self._refresh_realtime_monitor_page()
 
 
+    def _initialize_power_diagnostic_state(self):
+        self.power_diagnostic_analyzer = PowerDiagnosticAnalyzer(
+            has_neutral=bool(config.get("Has_N", 0))
+        )
+        cluster_indices = [
+            cluster_index
+            for cluster_index, _address in getattr(self, "cluster_options", [])
+            if cluster_index > 0
+        ]
+        self.power_diagnostic_raw_values = {cluster_index: {} for cluster_index in cluster_indices}
+        self.power_diagnostic_value_times = {cluster_index: {} for cluster_index in cluster_indices}
+        self.power_diagnostic_events = {cluster_index: [] for cluster_index in cluster_indices}
+        self.power_diagnostic_previous_states = {}
+        self.power_diagnostic_abnormal_latched = {}
+        sequence = []
+        for offset, data_id in enumerate(POWER_DIAGNOSTIC_SIGNAL_IDS):
+            if offset and offset % 5 == 0:
+                sequence.append(VAR_SYS_RUN_STATUS)
+            sequence.append(int(data_id))
+        self.power_diagnostic_poll_sequence = tuple(sequence)
+        self.power_diagnostic_query_index = 0
+        self.power_diagnostic_last_request_monotonic = 0.0
+        critical_sequence = []
+        for offset, data_id in enumerate(POWER_DIAGNOSTIC_CRITICAL_SIGNAL_IDS):
+            if offset and offset % 4 == 0:
+                critical_sequence.append(VAR_SYS_RUN_STATUS)
+            critical_sequence.append(int(data_id))
+        self.power_diagnostic_critical_sequence = tuple(critical_sequence)
+        self.power_diagnostic_critical_query_index = 0
+        self.power_diagnostic_static_query_index = 0
+        initialized_at = time.monotonic()
+        self.power_diagnostic_last_critical_request_monotonic = initialized_at
+        self.power_diagnostic_last_static_request_monotonic = initialized_at
+        if not hasattr(self, "power_alarm_overlay"):
+            self._setup_power_alarm_flash()
+
+
+    def _cache_power_diagnostic_index_value(self, cluster_index, data_id, raw_word):
+        try:
+            cluster_index = int(cluster_index)
+            data_id = int(data_id)
+            raw_word = int(raw_word) & 0xFFFF
+        except (TypeError, ValueError):
+            return
+        if cluster_index <= 0 or data_id not in POWER_DIAGNOSTIC_SIGNAL_IDS:
+            return
+        values = getattr(self, "power_diagnostic_raw_values", None)
+        if values is None:
+            self._initialize_power_diagnostic_state()
+            values = self.power_diagnostic_raw_values
+        cluster_values = values.setdefault(cluster_index, {})
+        cluster_values[data_id] = raw_word
+        self.power_diagnostic_value_times.setdefault(cluster_index, {})[data_id] = time.monotonic()
+
+        if data_id != VAR_SYS_RUN_STATUS:
+            return
+        previous = self.power_diagnostic_previous_states.get(cluster_index)
+        self.power_diagnostic_previous_states[cluster_index] = raw_word
+        event = self.power_diagnostic_analyzer.build_transition_event(
+            previous,
+            raw_word,
+            cluster_values,
+        )
+        if event is not None:
+            events = self.power_diagnostic_events.setdefault(cluster_index, [])
+            events.append(event)
+            del events[:-100]
+        self._update_power_diagnostic_alarm_state(cluster_index, cluster_values, event)
+
+
+    def _update_power_diagnostic_alarm_state(self, cluster_index, values, event=None):
+        analyzer = getattr(self, "power_diagnostic_analyzer", None)
+        if analyzer is None:
+            return
+        analyzer.has_neutral = bool(config.get("Has_N", 0))
+        report = analyzer.analyze(values)
+        abnormal = (
+            report.get("summary_status") == "blocked"
+            or report.get("shutdown_status") == "abnormal"
+            or (event is not None and event.get("severity") == "danger")
+        )
+        latched = bool(self.power_diagnostic_abnormal_latched.get(cluster_index, False))
+        self.power_diagnostic_abnormal_latched[cluster_index] = abnormal
+        if abnormal and not latched and cluster_index == self._active_cluster_index():
+            self._start_power_alarm_flash()
+
+
+    def _power_diagnostic_report(self, cluster_index):
+        analyzer = getattr(self, "power_diagnostic_analyzer", None)
+        if analyzer is None:
+            self._initialize_power_diagnostic_state()
+            analyzer = self.power_diagnostic_analyzer
+        analyzer.has_neutral = bool(config.get("Has_N", 0))
+        values = getattr(self, "power_diagnostic_raw_values", {}).get(int(cluster_index), {})
+        return analyzer.analyze(values)
+
+
+    def _refresh_power_diagnostic_page(self):
+        page = getattr(self, "S32", None)
+        if page is None:
+            return
+        cluster_index = self._active_cluster_index()
+        address = getattr(self, "selected_cluster_address", "")
+        page.set_cluster_context(cluster_index, address)
+        if cluster_index <= 0:
+            page.clear_values()
+            page.set_status_text("当前选择 00（未编制），不会请求上下电诊断数据。")
+            return
+        report = self._power_diagnostic_report(cluster_index)
+        events = getattr(self, "power_diagnostic_events", {}).get(cluster_index, [])
+        page.update_report(report, events)
+        timestamps = getattr(self, "power_diagnostic_value_times", {}).get(cluster_index, {})
+        if not getattr(self, "can_ready", False):
+            page.set_status_text("CAN未连接，当前显示最后一次诊断快照。", failed=True)
+        elif not timestamps:
+            page.set_status_text("正在请求诊断索引...")
+        else:
+            newest = max(timestamps.values())
+            age = max(0.0, time.monotonic() - newest)
+            page.set_status_text(
+                f"诊断数据已按簇隔离缓存，最新响应 {age:.1f} s 前。"
+            )
+
+
+    def _refresh_power_diagnostic_page_if_visible(self):
+        page = getattr(self, "S32", None)
+        if page is None or not page.auto_refresh_enabled():
+            return
+        if getattr(self, "table_index", None) == self._power_diagnostic_tab_index():
+            self._refresh_power_diagnostic_page()
+
+
+    def on_power_diagnostic_interval_changed(self, interval_ms):
+        timer = getattr(self, "timerPowerDiagnostic", None)
+        if timer is not None:
+            timer.setInterval(max(200, int(interval_ms)))
+
+
+    def on_power_diagnostic_refresh(self):
+        page = getattr(self, "S32", None)
+        cluster_index = self._active_cluster_index()
+        if page is None:
+            return
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            page.set_status_text("CAN未连接，无法刷新上下电诊断。", failed=True)
+            return
+        if cluster_index <= 0:
+            page.set_status_text("请先选择已编制的目标簇。", failed=True)
+            return
+        self.power_diagnostic_query_index = 0
+        self.power_diagnostic_last_request_monotonic = 0.0
+        page.set_status_text("已重置诊断轮询，正在获取最新证据...")
+        self._request_power_diagnostic_background(force=True)
+        self._refresh_power_diagnostic_page()
+
+
     def _host_control_snapshot_cache(self):
         cache = getattr(self, "host_control_snapshots", None)
         if cache is None:
@@ -2684,7 +2921,18 @@ class Edit(Ui_Form, QWidget):
 
 
     def _stop_can_timers(self):
-        for timer_name in ("send_time", "send_time1", "timer1", "timerResData", "timerDI", "timer_Forcecharge"):
+        for timer_name in (
+            "send_time",
+            "send_time1",
+            "timer1",
+            "timerResData",
+            "timerDI",
+            "timer_Forcecharge",
+            "timerRealtimeMonitor",
+            "timerActiveAlarm",
+            "timerPowerDiagnostic",
+            "power_alarm_flash_timer",
+        ):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():
                 timer.stop()
@@ -2787,6 +3035,7 @@ class Edit(Ui_Form, QWidget):
         self._load_bus_config_controls(load_can_board_config())
         self._configure_single_cluster_tab()
         self._hide_embedded_cluster_controls()
+        self._initialize_power_diagnostic_state()
         self._set_bus_status(False, "CAN: 未连接", "warning")
         self._update_rx_status(force=True)
 
@@ -2830,6 +3079,10 @@ class Edit(Ui_Form, QWidget):
         self.timerActiveAlarm.timeout.connect(self._refresh_active_alarm_page_if_visible)
         self.timerActiveAlarm.start(self.S28.refresh_interval_ms())
 
+        self.timerPowerDiagnostic = QTimer(self)
+        self.timerPowerDiagnostic.timeout.connect(self._refresh_power_diagnostic_page_if_visible)
+        self.timerPowerDiagnostic.start(self.S32.refresh_interval_ms())
+
 
         #告警切换槽函数
         self.S21.comboBox.currentIndexChanged.connect(self.on_alarm_cluster_changed)
@@ -2857,6 +3110,8 @@ class Edit(Ui_Form, QWidget):
         self.S28.read_button.clicked.connect(self.on_active_alarm_read)
         self.S28.auto_refresh_checkbox.toggled.connect(self.on_active_alarm_auto_refresh_toggled)
         self.S28.interval_spinbox.valueChanged.connect(self.on_active_alarm_interval_changed)
+        self.S32.refreshRequested.connect(self.on_power_diagnostic_refresh)
+        self.S32.refreshIntervalChanged.connect(self.on_power_diagnostic_interval_changed)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -2968,7 +3223,14 @@ class Edit(Ui_Form, QWidget):
 
         self.BCUSignalQ_DXYC=BCUSignalQ_DXYC
         self.BCUSignalQ_DXYC_index = 0
-        self.realtime_monitor_signal_ids = REALTIME_MONITOR_SIGNAL_IDS
+        diagnostic_page_signal_ids = tuple(
+            data_id
+            for data_id in POWER_DIAGNOSTIC_SIGNAL_IDS
+            if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
+        )
+        self.realtime_monitor_signal_ids = tuple(
+            dict.fromkeys(REALTIME_MONITOR_SIGNAL_IDS + diagnostic_page_signal_ids)
+        )
         self.realtime_monitor_signal_definitions = REALTIME_MONITOR_SIGNAL_DEFINITIONS
         self.realtime_monitor_definitions_by_id = {}
         for definition in self.realtime_monitor_signal_definitions:
@@ -3023,6 +3285,8 @@ class Edit(Ui_Form, QWidget):
                 self._refresh_cell_visualization_page()
             if index == self._system_kline_tab_index():
                 self.S31.refresh_active_chart(force=True)
+            if index == self._power_diagnostic_tab_index():
+                self._refresh_power_diagnostic_page()
 
 
 
@@ -4803,12 +5067,72 @@ class Edit(Ui_Form, QWidget):
         self.system_kline_last_request_monotonic = now
 
 
+    def _request_power_diagnostic_background(self, force=False):
+        cluster_index = self._active_cluster_index()
+        if cluster_index <= 0:
+            return
+        visible = getattr(self, "table_index", None) == self._power_diagnostic_tab_index()
+        now = time.monotonic()
+        if not visible and getattr(self, "table_index", None) == self._realtime_monitor_tab_index():
+            return
+
+        if visible or force:
+            sequence = getattr(self, "power_diagnostic_poll_sequence", ())
+            if not sequence:
+                return
+            last_request = float(getattr(self, "power_diagnostic_last_request_monotonic", 0.0))
+            if not force and last_request and now - last_request < POWER_DIAGNOSTIC_VISIBLE_REQUEST_INTERVAL_S:
+                return
+            cursor = int(getattr(self, "power_diagnostic_query_index", 0)) % len(sequence)
+            data_id = int(sequence[cursor])
+            self.power_diagnostic_query_index = (cursor + 1) % len(sequence)
+            self.power_diagnostic_last_request_monotonic = now
+        else:
+            critical_sequence = getattr(self, "power_diagnostic_critical_sequence", ())
+            static_sequence = POWER_DIAGNOSTIC_STATIC_SIGNAL_IDS
+            critical_last = float(
+                getattr(self, "power_diagnostic_last_critical_request_monotonic", 0.0)
+            )
+            static_last = float(
+                getattr(self, "power_diagnostic_last_static_request_monotonic", 0.0)
+            )
+            critical_due = not critical_last or now - critical_last >= POWER_DIAGNOSTIC_CRITICAL_REQUEST_INTERVAL_S
+            static_due = not static_last or now - static_last >= POWER_DIAGNOSTIC_STATIC_REQUEST_INTERVAL_S
+            if critical_due and critical_sequence:
+                cursor = int(getattr(self, "power_diagnostic_critical_query_index", 0)) % len(critical_sequence)
+                data_id = int(critical_sequence[cursor])
+                self.power_diagnostic_critical_query_index = (cursor + 1) % len(critical_sequence)
+                self.power_diagnostic_last_critical_request_monotonic = now
+            elif static_due and static_sequence:
+                cursor = int(getattr(self, "power_diagnostic_static_query_index", 0)) % len(static_sequence)
+                data_id = int(static_sequence[cursor])
+                self.power_diagnostic_static_query_index = (cursor + 1) % len(static_sequence)
+                self.power_diagnostic_last_static_request_monotonic = now
+            else:
+                return
+
+        if data_id is None:
+            return
+        data = [
+            data_id & 0xFF,
+            (data_id >> 8) & 0xFF,
+            (data_id >> 16) & 0xFF,
+            (data_id >> 24) & 0xFF,
+            0,
+            0,
+            0,
+            0,
+        ]
+        self.QueryData(cluster_index, data)
+
+
     def RequestBCUVAR(self):
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
             return
         self._update_can_link_health()
         self._request_system_kline_background()
         self._request_all_cluster_log_runtime_data()
+        self._request_power_diagnostic_background()
 
         if self.table_index == self._realtime_monitor_tab_index():
             index = self._active_cluster_index()
@@ -5298,6 +5622,7 @@ class Edit(Ui_Form, QWidget):
             "timerDI",
             "timer_Forcecharge",
             "timerActiveAlarm",
+            "timerPowerDiagnostic",
         ):
             timer = getattr(self, timer_name, None)
             if timer is not None and timer.isActive():

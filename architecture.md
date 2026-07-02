@@ -7,6 +7,7 @@
 - `application/trend_store.py`：按簇保存总压/电流趋势，增量生成多个时间周期，容量固定。
 - `application/dbc_parser.py`：DBC文件模型和纯数据解析。
 - `application/index_catalog.py`：解析固件索引、动态展开模组/单体位置并叠加用户自定义配置。
+- `application/power_diagnostics.py`：按 701 固件状态机解析上电阻断条件、预充阈值和异常下电证据。
 - `session_logger.py`：CSV滚动文件、缓冲写入和统一刷盘。
 - `UI/`：展示缓存快照；隐藏页面不执行高频表格或图表重绘。
 
@@ -53,7 +54,15 @@
 重新生成目录：
 
 ```powershell
-python scripts/generate_index_catalog.py --source-root "D:\DDSAVE\工作\IDC\下位机\01.bcu_app_01v01" --output resources\index_catalog.json
+python scripts/generate_index_catalog.py --source-root "D:\DDSAVE\工作\IDC\下位机\701\01.bcu_app_01v01" --output resources\index_catalog.json
 ```
+
+## 上下电诊断
+
+- 诊断索引使用统一 `CMD_READ_VAR` 请求，按当前簇隔离缓存；隐藏页面仍低频采集运行状态和关键证据。
+- 页面可见时提高轮询频率，UI 只读取缓存快照，不在刷新回调中阻塞等待 CAN 响应。
+- 状态从预充/高压运行回退到准备、故障、切断或休眠时，保存时间、状态迁移、原因和证据，每簇最多 100 条。
+- 规则区分“状态机实际生效”与“701 固件当前提前 return 屏蔽”的条件，屏蔽项只提示风险，不误报为实际阻断原因。
+- 新阻断或异常下电通过按簇故障锁存触发全窗口红色闪烁；持续故障不重复打断操作，诊断恢复后自动解除锁存。
 
 发布前运行 `python scripts/release_check.py`。该命令同时执行功能回归和无硬件负载验证。

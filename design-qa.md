@@ -107,4 +107,21 @@ The AIDC implementation follows the DCBMS host-control workflow while using the 
 
 No actionable P0, P1, or P2 index-browser findings remain.
 
+## Power Diagnostic QA
+
+- Existing AIDC visual reference: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\realtime_1366x768_updated.png`
+- Final screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\power_diagnostic_final_1366x768.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\power_diagnostic_final_1024x768.png`
+- Alarm flash screenshot: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\power_diagnostic_alarm_flash_1366x768.png`
+- Firmware source: `D:\DDSAVE\工作\IDC\下位机\701\01.bcu_app_01v01`
+
+The page follows the existing AIDC operational layout: compact command row, current-cluster context, restrained status band, dense evidence table, and event history. It uses the 701 battery-management state machine rather than a manually maintained fault checklist.
+
+- Diagnostic coverage: task readiness, directional alarm levels, current sensor, insulation completion, high-voltage sampling, relay self-test and feedback, breaker input, BCU/CSU addressing, VMS requests, and precharge voltage/current/time conditions.
+- Firmware fidelity: VMS shutdown, HVIL, and BCU-address checks that are bypassed by early returns in the 701 interface code are marked as firmware-bypassed warnings instead of active blockers.
+- Event capture: transitions from precharge/high-voltage states to ready, fault, cutoff, or sleep are retained per cluster with time, classification, cause, and evidence. Fault evidence takes priority over coincident VMS requests.
+- Alarm presentation: a newly detected abnormal transition or existing fault/cutoff state starts three 240 ms full-window red flashes. The overlay covers the complete client area, remains mouse-transparent, and leaves the persistent diagnostic conclusion visible afterward.
+- Responsive behavior: fresh application instances retain exact 1024 x 768 and 1366 x 768 client sizes. Tables scroll internally and long evidence remains available through tooltips; no controls or labels overlap.
+
+No actionable P0, P1, or P2 power-diagnostic findings remain.
+
 final result: passed
