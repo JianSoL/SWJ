@@ -561,6 +561,38 @@ def test_power_diagnostics():
     _assert(report["summary_status"] == "ok", "valid power-on conditions should pass")
     _assert(report["blocked_count"] == 0, "valid diagnostic should have no blocker")
 
+    relay_low_side_fault = dict(raw)
+    relay_low_side_fault[61] = 2
+    relay_low_side_fault[67] = 2
+    relay_feedback_report = analyzer.analyze(relay_low_side_fault)
+    relay_self_test = next(
+        item for item in relay_feedback_report["conditions"] if "粘连自检" in item["name"]
+    )
+    relay_feedback = next(
+        item for item in relay_feedback_report["conditions"] if "反馈诊断" in item["name"]
+    )
+    _assert(relay_self_test["status"] == "ok", "low-side relay feedback must not fail stick self-test")
+    _assert(relay_feedback["status"] == "warning", "relay feedback fault should be shown as evidence")
+    _assert(
+        "R4=0x0002(对地短路)" in relay_feedback["value"]
+        and "R10=0x0002(对地短路)" in relay_feedback["value"],
+        "relay feedback bit decoding mismatch",
+    )
+    _assert(relay_feedback_report["blocked_count"] == 0, "low-side feedback must not become a direct blocker")
+    _assert(
+        relay_feedback_report["summary_title"] == "具备条件，存在注意项",
+        "ordinary relay feedback should not be described as a firmware bypass",
+    )
+
+    relay_stick_fault = dict(raw)
+    relay_stick_fault[61] = 0x0100
+    relay_stick_report = analyzer.analyze(relay_stick_fault)
+    _assert(
+        next(item for item in relay_stick_report["conditions"] if "粘连自检" in item["name"])["status"]
+        == "blocked",
+        "relay 1-8 stick feedback should fail firmware self-test",
+    )
+
     current_fault = dict(raw)
     current_fault[290] = 3
     fault_report = analyzer.analyze(current_fault)
@@ -787,7 +819,13 @@ def test_main_window_offscreen_logging():
             window.RequestBCUVAR()
             window.system_kline_last_request_monotonic = 0.0
             window.RequestBCUVAR()
-            requested_kline_ids = [query[1][0] | (query[1][1] << 8) for query in sent_monitor_queries]
+            requested_ids = [
+                sum(query[1][offset] << (8 * offset) for offset in range(4))
+                for query in sent_monitor_queries
+            ]
+            requested_kline_ids = [
+                data_id for data_id in requested_ids if data_id in main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS
+            ]
             _assert(
                 requested_kline_ids
                 == [main_module.VAR_SYS_VOLT, main_module.VAR_HALL_CURR, main_module.VAR_SHUNT_CURR],

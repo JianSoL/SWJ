@@ -288,33 +288,63 @@ class PowerDiagnosticAnalyzer:
         relay_commands = [word(47 + number) for number in range(1, 11)]
         feedback_words = [word(57 + number) for number in range(1, 11)]
         sticky = [index + 1 for index, value in enumerate(feedback_words) if value is not None and value & 0x0100]
-        cannot_close = [index + 1 for index, value in enumerate(feedback_words) if value is not None and value & 0x0200]
-        abnormal_open = [index + 1 for index, value in enumerate(feedback_words) if value is not None and value & 0x0400]
-        low_side_fault = [index + 1 for index, value in enumerate(feedback_words) if value is not None and value & 0x001F]
+        state_machine_sticky = [number for number in sticky if number <= 8]
         if stick_test is None:
             stick_status = "unknown"
-        elif stick_test != 0xAAAA or sticky or cannot_close or abnormal_open or low_side_fault:
+        elif stick_test != 0xAAAA or state_machine_sticky:
             stick_status = "blocked"
         else:
             stick_status = "ok"
-        relay_value = "--" if stick_test is None else f"自检 0x{stick_test:04X}"
-        if sticky:
-            relay_value += f" / 粘连 R{','.join(map(str, sticky))}"
-        if cannot_close:
-            relay_value += f" / 无法闭合 R{','.join(map(str, cannot_close))}"
-        if abnormal_open:
-            relay_value += f" / 异常断开 R{','.join(map(str, abnormal_open))}"
-        if low_side_fault:
-            relay_value += f" / 驱动故障 R{','.join(map(str, low_side_fault))}"
+        relay_value = "--" if stick_test is None else f"索引289=0x{stick_test:04X}"
+        if state_machine_sticky:
+            relay_value += f" / 粘连 R{','.join(map(str, state_machine_sticky))}"
         conditions.append(
             _condition(
                 "自检",
-                "继电器自检与反馈",
+                "继电器粘连自检（索引289）",
                 relay_value,
                 stick_status,
-                "自检完成码为0xAAAA；反馈高字节bit0粘连、bit1无法闭合。",
-                "核对继电器映射、线圈驱动、辅助触点和母线电压回采。",
-                "Task_Batt_Manage.c:132-137; Var_Macro.h:98-107",
+                "状态机要求索引289为0xAAAA，并仅统计继电器1～8反馈高字节bit0粘连。",
+                "检查粘连检测流程、继电器辅助触点和母线电压回采。",
+                "Task_Batt_Manage.c:132-137; Task_Batt_Manage_In_Interface.c:890-903",
+            )
+        )
+
+        feedback_bits = (
+            (0x0001, "断线"),
+            (0x0002, "对地短路"),
+            (0x0004, "对电源短路"),
+            (0x0008, "芯片反馈错误"),
+            (0x0010, "其他驱动故障"),
+            (0x0100, "粘连"),
+            (0x0200, "无法闭合"),
+            (0x0400, "异常断开"),
+        )
+        feedback_faults = []
+        for number, value in enumerate(feedback_words, start=1):
+            if value is None or value == 0:
+                continue
+            labels = [label for mask, label in feedback_bits if value & mask]
+            detail = "/".join(labels) if labels else "未定义位"
+            feedback_faults.append(f"R{number}=0x{value:04X}({detail})")
+        if all(value is None for value in feedback_words):
+            feedback_status = "unknown"
+            feedback_value = "索引58～67未读取"
+        elif feedback_faults:
+            feedback_status = "warning"
+            feedback_value = "；".join(feedback_faults)
+        else:
+            feedback_status = "ok"
+            feedback_value = "索引58～67均为0x0000"
+        conditions.append(
+            _condition(
+                "反馈",
+                "继电器反馈诊断（索引58～67）",
+                feedback_value,
+                feedback_status,
+                "低字节bit0～4依次为断线、对地短路、对电源短路、芯片错误、其他故障；高字节bit0～2依次为粘连、无法闭合、异常断开。",
+                "结合对应继电器通道检查线圈、驱动输出和辅助触点；是否阻断上电由粘连自检及严重告警单独判定。",
+                "Var_Macro.h:98-107; Task_Batt_Manage_In_Interface.c:890-903",
             )
         )
 
@@ -448,6 +478,7 @@ class PowerDiagnosticAnalyzer:
 
         blocked = [item for item in conditions if item["status"] == "blocked"]
         warning = [item for item in conditions if item["status"] in ("warning", "bypassed")]
+        bypassed = [item for item in conditions if item["status"] == "bypassed"]
         unknown = [item for item in conditions if item["status"] == "unknown"]
         if run_status in {4, 5, 6, 7, 8}:
             summary_status = "ok"
@@ -463,7 +494,12 @@ class PowerDiagnosticAnalyzer:
             summary_title = "等待诊断数据完整"
         else:
             summary_status = "warning" if warning else "ok"
-            summary_title = "具备上电条件" if not warning else "具备条件，存在固件屏蔽项"
+            if not warning:
+                summary_title = "具备上电条件"
+            elif bypassed:
+                summary_title = "具备条件，存在固件屏蔽项"
+            else:
+                summary_title = "具备条件，存在注意项"
 
         shutdown_reasons = self.shutdown_reasons(raw)
         return {
