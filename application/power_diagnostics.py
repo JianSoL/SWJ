@@ -438,42 +438,6 @@ class PowerDiagnosticAnalyzer:
             )
         )
 
-        shutdown_req = word(0x83004)
-        conditions.append(
-            _condition(
-                "外部请求",
-                "VMS关机请求",
-                "--" if shutdown_req is None else ("请求关机" if shutdown_req else "无请求"),
-                "unknown" if shutdown_req is None else ("ok" if shutdown_req == 0 else "bypassed"),
-                "701固件 Get_VAR_VMS_SHUT_DOWN_REQ 提前 return false。",
-                "确认VMS请求来源；当前状态机不会通过该函数响应关机请求。",
-                "Task_Batt_Manage_In_Interface.c:34-40/386-391",
-            )
-        )
-
-        ctrl = word(0x83001)
-        request_ids = (0x8301B, 0x8301C) if self.has_neutral else (0x83002,)
-        request_names = ("上半簇继电器请求", "下半簇继电器请求") if self.has_neutral else ("VMS继电器请求",)
-        for data_id, name in zip(request_ids, request_names):
-            request = word(data_id)
-            if ctrl is None or request is None:
-                status = "unknown"
-            elif ctrl == 0 or ((request >> 1) & 0x01):
-                status = "ok"
-            else:
-                status = "blocked"
-            conditions.append(
-                _condition(
-                    "外部请求",
-                    name,
-                    "--" if request is None else f"控制={ctrl or 0}, 请求={request}",
-                    status,
-                    "VMS接管继电器时，状态机要求请求字bit1有效后才允许进入预充。",
-                    "检查VMS控制使能、闭合请求和通信刷新。",
-                    "Task_Batt_Manage.c:288-290/3000-3002",
-                )
-            )
-
         self._append_precharge_conditions(raw, conditions)
 
         blocked = [item for item in conditions if item["status"] == "blocked"]

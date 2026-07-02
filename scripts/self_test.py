@@ -561,6 +561,18 @@ def test_power_diagnostics():
     _assert(report["summary_status"] == "ok", "valid power-on conditions should pass")
     _assert(report["blocked_count"] == 0, "valid diagnostic should have no blocker")
 
+    ignored_vms_requests = dict(raw)
+    ignored_vms_requests.update({0x83001: 1, 0x83002: 0, 0x83004: 1})
+    ignored_vms_report = analyzer.analyze(ignored_vms_requests)
+    _assert(
+        not any(item["category"] == "外部请求" for item in ignored_vms_report["conditions"]),
+        "VMS request conditions should be hidden from power-on diagnostics",
+    )
+    _assert(
+        ignored_vms_report["blocked_count"] == 0,
+        "VMS request values should not block power-on diagnostics",
+    )
+
     relay_low_side_fault = dict(raw)
     relay_low_side_fault[61] = 2
     relay_low_side_fault[67] = 2
