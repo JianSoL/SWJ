@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QProgressBar,
     QScrollArea,
     QSplitter,
     QSpinBox,
@@ -101,12 +102,18 @@ def _field_label(text, tooltip=None, alignment=None):
 
 
 class MainWindow(QWidget):
+    alarmSelected = pyqtSignal(int)
+    detailReadRequested = pyqtSignal()
+    cancelRequested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.alarm_definitions = self._build_alarm_definitions()
         self.summary_items = {}
         self.record_cache = {}
+        self.raw_record_cache = {}
         self.current_record_complete = False
+        self.transfer_busy = False
         self._ignore_selection = False
         self._build_ui()
         self._populate_alarm_rows()
@@ -161,8 +168,15 @@ class MainWindow(QWidget):
         self.cluster_label.hide()
         toolbar.addStretch(1)
 
-        self.button = QPushButton("读取告警参数", self)
+        self.enabled_only_checkbox = QCheckBox("仅启用告警", self)
+        self.enabled_only_checkbox.setChecked(True)
+        toolbar.addWidget(self.enabled_only_checkbox)
+
+        self.button = QPushButton("快速读取摘要", self)
         toolbar.addWidget(self.button)
+
+        self.detail_read_button = QPushButton("读取选中项", self)
+        toolbar.addWidget(self.detail_read_button)
 
         self.modify_button = QPushButton("写入选中告警", self)
         self.modify_button.setObjectName("primaryButton")
@@ -170,6 +184,10 @@ class MainWindow(QWidget):
 
         self.submit_button = QPushButton("保存参数到FLASH", self)
         toolbar.addWidget(self.submit_button)
+
+        self.cancel_button = QPushButton("停止", self)
+        self.cancel_button.setEnabled(False)
+        toolbar.addWidget(self.cancel_button)
 
         self.read_summary_button = self.button
         self.write_current_button = self.modify_button
@@ -180,6 +198,14 @@ class MainWindow(QWidget):
         self.status_label.setObjectName("sectionHint")
         self.status_label.setWordWrap(True)
         root_layout.addWidget(self.status_label)
+
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("空闲")
+        self.progress_bar.setFixedHeight(20)
+        root_layout.addWidget(self.progress_bar)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.setChildrenCollapsible(False)
@@ -302,6 +328,8 @@ class MainWindow(QWidget):
         splitter.setStretchFactor(1, 7)
         root_layout.addWidget(splitter, 1)
         self._set_record_complete(False)
+        self.detail_read_button.clicked.connect(self.detailReadRequested.emit)
+        self.cancel_button.clicked.connect(self.cancelRequested.emit)
 
     def _populate_alarm_rows(self):
         self.alarm_table.setRowCount(len(self.alarm_definitions))
@@ -329,6 +357,14 @@ class MainWindow(QWidget):
     def alarm_count(self):
         return len(self.alarm_definitions)
 
+    def selected_alarm_ids_for_summary(self):
+        enabled_only = self.enabled_only_checkbox.isChecked()
+        return [
+            definition["alarm_id"]
+            for definition in self.alarm_definitions
+            if definition["enabled"] or not enabled_only
+        ]
+
     def set_cluster_context(self, cluster_index=None, address=None):
         if cluster_index is None:
             cluster_index = self.comboBox.currentIndex()
@@ -345,6 +381,7 @@ class MainWindow(QWidget):
 
     def clear_cached_values(self):
         self.record_cache.clear()
+        self.raw_record_cache.clear()
         for summary_map in self.summary_items.values():
             for item in summary_map.values():
                 item.setText("")
@@ -375,6 +412,7 @@ class MainWindow(QWidget):
         self.current_record_complete = bool(complete)
         self.delay_group.setEnabled(self.current_record_complete)
         self.option_group.setEnabled(self.current_record_complete)
+        self.modify_button.setEnabled(self.current_record_complete and not self.transfer_busy)
 
     def current_alarm_id(self):
         selected = self.alarm_table.selectionModel().selectedRows()
@@ -401,6 +439,7 @@ class MainWindow(QWidget):
         if alarm_id is None:
             return
         self._apply_cached_or_empty_detail(alarm_id)
+        self.alarmSelected.emit(alarm_id)
 
     def _apply_cached_or_empty_detail(self, alarm_id):
         definition = self.alarm_definitions[alarm_id]
@@ -408,6 +447,14 @@ class MainWindow(QWidget):
         if values is None:
             self.clear_detail()
             self.selected_alarm_label.setText(f"{definition['code']} {definition['name']} - 未读取")
+            self.alarm_id_label.setText(f"告警ID / u16AlarmId: {alarm_id} / 序号 {definition['code']}")
+            return
+        if len(self.raw_record_cache.get(alarm_id, {})) < len(ALARM_PARAMETER_FIELDS):
+            received = len(self.raw_record_cache.get(alarm_id, {}))
+            self.clear_detail()
+            self.selected_alarm_label.setText(
+                f"{definition['code']} {definition['name']} - 正在读取 {received}/{len(ALARM_PARAMETER_FIELDS)}"
+            )
             self.alarm_id_label.setText(f"告警ID / u16AlarmId: {alarm_id} / 序号 {definition['code']}")
             return
         self._apply_values_to_detail(alarm_id, values)
@@ -421,15 +468,41 @@ class MainWindow(QWidget):
     def update_alarm_row(self, row, raw_values):
         if row < 0 or row >= len(self.alarm_definitions):
             return
-        values = {}
-        for key, _label, field_index, _signed, _summary in ALARM_PARAMETER_FIELDS:
-            raw_value = raw_values[field_index] if field_index < len(raw_values) else 0
-            values[key] = self._decode_field_value(key, raw_value)
-        self.record_cache[row] = values
-        for key, item in self.summary_items.get(row, {}).items():
-            item.setText(str(values.get(key, "")))
-        if self.current_alarm_id() == row:
-            self._apply_values_to_detail(row, values)
+        for _key, _label, field_index, _signed, _summary in ALARM_PARAMETER_FIELDS:
+            if field_index < len(raw_values):
+                self.update_alarm_field(row, field_index, raw_values[field_index])
+
+    def update_alarm_field(self, alarm_id, field_index, raw_value):
+        alarm_id = int(alarm_id)
+        field_index = int(field_index)
+        if not (0 <= alarm_id < len(self.alarm_definitions)):
+            return
+        field = next(
+            (definition for definition in ALARM_PARAMETER_FIELDS if definition[2] == field_index),
+            None,
+        )
+        if field is None:
+            return
+        key = field[0]
+        raw_value = int(raw_value) & 0xFFFF
+        self.raw_record_cache.setdefault(alarm_id, {})[field_index] = raw_value
+        values = self.record_cache.setdefault(alarm_id, {})
+        values[key] = self._decode_field_value(key, raw_value)
+        summary_item = self.summary_items.get(alarm_id, {}).get(key)
+        if summary_item is not None:
+            summary_item.setText(str(values[key]))
+        if self.current_alarm_id() == alarm_id:
+            if len(self.raw_record_cache[alarm_id]) >= len(ALARM_PARAMETER_FIELDS):
+                self._apply_values_to_detail(alarm_id, values)
+            else:
+                definition = self.alarm_definitions[alarm_id]
+                self.selected_alarm_label.setText(
+                    f"{definition['code']} {definition['name']} - 正在读取 "
+                    f"{len(self.raw_record_cache[alarm_id])}/{len(ALARM_PARAMETER_FIELDS)}"
+                )
+
+    def has_complete_alarm_record(self, alarm_id):
+        return len(self.raw_record_cache.get(int(alarm_id), {})) >= len(ALARM_PARAMETER_FIELDS)
 
     def _apply_values_to_detail(self, alarm_id, values):
         definition = self.alarm_definitions[alarm_id]
@@ -495,6 +568,41 @@ class MainWindow(QWidget):
                 continue
             raw_fields[field["index"]] = _encode_u16(values[key])
         return alarm_id, raw_fields
+
+    def build_changed_raw_fields(self):
+        alarm_id, raw_fields = self.build_current_raw_fields()
+        if alarm_id is None:
+            return None, {}
+        cached = self.raw_record_cache.get(alarm_id, {})
+        changed = {
+            field_index: raw_value
+            for field_index, raw_value in raw_fields.items()
+            if cached.get(field_index) != raw_value
+        }
+        return alarm_id, changed
+
+    def set_transfer_progress(self, progress, message=None):
+        progress = dict(progress or {})
+        total = max(0, int(progress.get("total", 0)))
+        completed = max(0, int(progress.get("completed", 0)))
+        busy = progress.get("phase") not in (None, "idle", "complete", "cancelled")
+        self.transfer_busy = busy
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(min(completed, max(total, 1)))
+        failed = int(progress.get("failed", 0))
+        if busy:
+            self.progress_bar.setFormat(f"%v/%m  失败 {failed}")
+        elif progress.get("phase") == "complete":
+            self.progress_bar.setFormat(f"完成 {completed}/{total}  失败 {failed}")
+        else:
+            self.progress_bar.setFormat("空闲")
+        self.button.setEnabled(not busy)
+        self.detail_read_button.setEnabled(not busy and self.current_alarm_id() is not None)
+        self.submit_button.setEnabled(not busy)
+        self.cancel_button.setEnabled(busy)
+        self._set_record_complete(self.current_record_complete)
+        if message is not None:
+            self.set_status_text(message)
 
     def setItem(self, row, col, con):
         if row < 0 or row >= len(self.alarm_definitions):

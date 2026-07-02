@@ -124,4 +124,13 @@ The page follows the existing AIDC operational layout: compact command row, curr
 
 No actionable P0, P1, or P2 power-diagnostic findings remain.
 
+## Alarm Parameter QA
+
+- Existing AIDC visual reference: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\realtime_1366x768_updated.png`
+- Final screenshots: `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\alarm_parameters_refactor_1366x768.png` and `D:\DDSAVE\工作\AIDCSWJ\build\layout_audit\alarm_parameters_refactor_1024x768.png`
+- Toolbar controls, transfer progress, split list/detail workspace, and scroll behavior were checked at both widths with no overlap.
+- Interaction coverage includes enabled-only summary reads, selected-alarm detail reads, cancellation, changed-field writes, response timeout/retry, and readback verification.
+
+No actionable P0, P1, or P2 alarm-parameter findings remain.
+
 final result: passed

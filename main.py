@@ -28,6 +28,7 @@ from application.power_diagnostics import (
     POWER_DIAGNOSTIC_STATIC_SIGNAL_IDS,
     PowerDiagnosticAnalyzer,
 )
+from application.alarm_parameter_transfer import AlarmParameterTransfer
 from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
@@ -67,6 +68,10 @@ RX_STATUS_UI_INTERVAL_S = 0.25
 POWER_DIAGNOSTIC_VISIBLE_REQUEST_INTERVAL_S = 0.05
 POWER_DIAGNOSTIC_CRITICAL_REQUEST_INTERVAL_S = 0.4
 POWER_DIAGNOSTIC_STATIC_REQUEST_INTERVAL_S = 2.0
+ALARM_PARAMETER_TIMER_INTERVAL_MS = 20
+ALARM_PARAMETER_REQUEST_BURST = 3
+ALARM_PARAMETER_WRITE_BURST = 2
+ALARM_PARAMETER_MAX_IN_FLIGHT = 12
 
 CTRL_WORK_MODE = 0x01
 CTRL_CHNNEL = 0x02
@@ -2946,7 +2951,11 @@ class Edit(Ui_Form, QWidget):
 
     def _start_can_timers(self):
         self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
-        self.send_time1.stop()
+        transfer = getattr(self, "alarm_parameter_transfer", None)
+        if transfer is not None and transfer.is_busy():
+            self.send_time1.start(ALARM_PARAMETER_TIMER_INTERVAL_MS)
+        else:
+            self.send_time1.stop()
         self.timer1.start(CAN_REQUEST_NORMAL_INTERVAL_MS)
         realtime_timer = getattr(self, "timerRealtimeMonitor", None)
         if realtime_timer is not None:
@@ -3062,9 +3071,7 @@ class Edit(Ui_Form, QWidget):
         self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
 
         self.send_time1 = QTimer(self)
-        # 给QTimer设定一个时间，每到达这个时间一次就会调用一次该方法
-        self.send_time1.timeout.connect(self.RequestAlarmData)
-        # 设置QTimer开始计时，且设定时间为1000ms
+        self.send_time1.timeout.connect(self._process_alarm_parameter_transfer)
         self.send_time1.stop()
 
         # 逐行加载数据的定时器
@@ -3122,6 +3129,9 @@ class Edit(Ui_Form, QWidget):
                 lambda checked, channel_id=channel_id: self.on_host_control_channel_toggled(channel_id, checked)
             )
         self.S21.button.clicked.connect(self.on_alarm_parameter_read)
+        self.S21.detailReadRequested.connect(self.on_alarm_parameter_read_selected)
+        self.S21.alarmSelected.connect(self.on_alarm_parameter_selected)
+        self.S21.cancelRequested.connect(self.on_alarm_parameter_cancel)
         self.S28.read_button.clicked.connect(self.on_active_alarm_read)
         self.S28.auto_refresh_checkbox.toggled.connect(self.on_active_alarm_auto_refresh_toggled)
         self.S28.interval_spinbox.valueChanged.connect(self.on_active_alarm_interval_changed)
@@ -3167,10 +3177,14 @@ class Edit(Ui_Form, QWidget):
         self.S21.modify_button.clicked.connect(self.on_alarm_parameter_write_current)
 
 
-        #告警修改索引
         self.AlarmIndex = 0
-        self.alarm_request_limit = self.S21.alarm_count() * 32
-        self.pending_alarm_writes = {}
+        self.alarm_parameter_transfer = AlarmParameterTransfer(
+            config["Glaoal_Index_alarm"],
+            self.S21.alarm_count(),
+            field_count=30,
+        )
+        self.alarm_transfer_completion_handled = True
+        self.alarm_transfer_last_phase = "idle"
         self.S21.set_cluster_context()
 
 
@@ -3292,6 +3306,13 @@ class Edit(Ui_Form, QWidget):
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():
                 self._refresh_active_alarm_page_if_visible(force=True)
+            if (
+                index == self._alarm_tab_index()
+                and not self.S21.record_cache
+                and getattr(self, "can_ready", False)
+                and self._is_compiled_active_cluster()
+            ):
+                self.on_alarm_parameter_read()
             if index == self._realtime_monitor_tab_index():
                 self._refresh_realtime_monitor_page()
             if index == self._control_tab_index():
@@ -4301,47 +4322,25 @@ class Edit(Ui_Form, QWidget):
 
 
 
-            # 告警参数获取
-            # for i in range(64):
-            #     for j in range(32):
             try:
-                if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
+                active_address = config["ADDRESLIST"][self._active_cluster_index()].casefold()
+                if ("0x1881F2" + active_address).casefold() == ID.casefold():
                     data_id = self._u32_from_response(byte0, byte1, byte2, byte3)
-                    varid = data_id - config["Glaoal_Index_alarm"]
-                    alarm_row = varid // 32
-                    field_index = varid % 32
-                    if 0 <= alarm_row < len(Alarm_list) and 0 <= field_index < 32:
-                        Alarm_list[alarm_row][field_index] = byte4 + byte5 * 256
-                        if alarm_row < self.S21.alarm_count():
-                            self.S21.update_alarm_row(alarm_row, Alarm_list[alarm_row])
-                # print(Alarm_list)
-            except:
+                    transfer = getattr(self, "alarm_parameter_transfer", None)
+                    if transfer is not None and transfer.is_alarm_data_id(data_id):
+                        self._handle_alarm_parameter_read_response(
+                            data_id,
+                            byte4 + byte5 * 256,
+                            success=byte6 != 0,
+                        )
+                elif ("0x1883F2" + active_address).casefold() == ID.casefold():
+                    data_id = self._u32_from_response(byte0, byte1, byte2, byte3)
+                    self._handle_alarm_parameter_write_response(
+                        data_id,
+                        success=(byte4 + byte5 * 256) != 0,
+                    )
+            except (IndexError, KeyError, TypeError, ValueError):
                 pass
-
-
-            if (("0x1883F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
-                varid = self._u32_from_response(byte0, byte1, byte2, byte3)
-
-                pending = getattr(self, "pending_alarm_writes", {})
-                if varid in pending:
-                    success = (byte4 + byte5 * 256) != 0
-                    if not success:
-                        self.pending_alarm_write_failed = getattr(self, "pending_alarm_write_failed", 0) + 1
-                    pending.pop(varid, None)
-                    if pending:
-                        self.S21.set_status_text(f"告警参数写入中，剩余 {len(pending)} 项...")
-                    else:
-                        failed = getattr(self, "pending_alarm_write_failed", 0)
-                        if failed:
-                            self.S21.set_status_text(f"告警参数写入完成，失败 {failed} 项，请检查工装模式或参数范围。")
-                            QMessageBox.warning(self, "告警参数写入", f"写入完成，但有 {failed} 项被下位机拒绝。")
-                        else:
-                            self.S21.set_status_text("告警参数写入成功。")
-                            QMessageBox.information(self, "告警参数写入", "选中告警参数写入成功。")
-                    self.pending_alarm_writes = pending
-                elif(varid == self.AlarmIndex):
-                    if(byte4==1):
-                        QMessageBox.information(self, "修改结果显示", "修改成功！")
 
             if self.table_index == self._parameter_tab_index():
                 if (("0x1881F2" + config["ADDRESLIST"][self._active_cluster_index()].casefold()).casefold() == ID.casefold()):
@@ -4562,36 +4561,80 @@ class Edit(Ui_Form, QWidget):
 
 
     def on_alarm_parameter_read(self):
-        global g_index
-        g_index = 0
-        self.current_COUNT = 0
-        self.alarm_request_limit = self.S21.alarm_count() * 32
         self.S21.set_cluster_context()
+        if not self._alarm_parameter_ready():
+            return
+        alarm_ids = self.S21.selected_alarm_ids_for_summary()
         self.S21.clear_cached_values()
-        if not getattr(self, "can_ready", False):
-            self.S21.set_status_text("CAN未连接，无法读取告警参数。")
-            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再读取告警参数。")
-            return
-        if not self._is_compiled_active_cluster():
-            self.S21.set_status_text("当前选择 00（未编制），请选择真实簇后再读取告警参数。")
-            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能读取告警参数。")
-            return
-        if self.send_time1 is not None:
-            interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
-            self.send_time1.start(interval)
-        self.S21.set_status_text(
-            f"正在读取告警参数：共 {self.alarm_request_limit} 个字段。"
+        transfer = self.alarm_parameter_transfer
+        transfer.cache.clear()
+        transfer.start_summary(alarm_ids)
+        self.alarm_transfer_completion_handled = False
+        self.alarm_transfer_last_phase = transfer.phase
+        self.S21.set_transfer_progress(
+            transfer.progress(),
+            f"正在快速读取 {len(alarm_ids)} 条告警摘要，仅请求阈值和回差字段。",
         )
+        self.send_time1.start(ALARM_PARAMETER_TIMER_INTERVAL_MS)
+
+
+    def _alarm_parameter_ready(self, show_dialog=True):
+        if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
+            self.S21.set_status_text("CAN未连接，无法操作告警参数。")
+            if show_dialog:
+                QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再操作告警参数。")
+            return False
+        if not self._is_compiled_active_cluster():
+            self.S21.set_status_text("当前选择 00（未编制），请选择真实簇后再操作告警参数。")
+            if show_dialog:
+                QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能操作告警参数。")
+            return False
+        return True
+
+
+    def on_alarm_parameter_selected(self, alarm_id):
+        if self.S21.has_complete_alarm_record(alarm_id):
+            return
+        if not self._alarm_parameter_ready(show_dialog=False):
+            return
+        self._start_alarm_parameter_detail_read(alarm_id)
+
+
+    def on_alarm_parameter_read_selected(self):
+        alarm_id = self.S21.current_alarm_id()
+        if alarm_id is None:
+            QMessageBox.warning(self, "未选择告警", "请先在告警列表中选择一条告警。")
+            return
+        if not self._alarm_parameter_ready():
+            return
+        self._start_alarm_parameter_detail_read(alarm_id)
+
+
+    def _start_alarm_parameter_detail_read(self, alarm_id):
+        transfer = self.alarm_parameter_transfer
+        transfer.start_detail(alarm_id)
+        self.alarm_transfer_completion_handled = False
+        self.alarm_transfer_last_phase = transfer.phase
+        definition = self.S21.alarm_definitions[int(alarm_id)]
+        self.S21.set_transfer_progress(
+            transfer.progress(),
+            f"正在优先读取 {definition['code']} {definition['name']} 的30个有效字段。",
+        )
+        self.send_time1.start(ALARM_PARAMETER_TIMER_INTERVAL_MS)
+
+
+    def on_alarm_parameter_cancel(self):
+        transfer = self.alarm_parameter_transfer
+        transfer.cancel()
+        self.send_time1.stop()
+        self.alarm_transfer_completion_handled = True
+        self.S21.set_transfer_progress(transfer.progress(), "已停止告警参数传输。")
 
 
     def on_alarm_parameter_write_current(self):
-        if not getattr(self, "can_ready", False):
-            QMessageBox.warning(self, "CAN未连接", "请先连接CAN后再写入告警参数。")
+        if not self._alarm_parameter_ready():
             return
-        if not self._is_compiled_active_cluster():
-            QMessageBox.warning(self, "未编制簇", "00 地址为未编制状态，不能写入告警参数。")
-            return
-        alarm_id, raw_fields = self.S21.build_current_raw_fields()
+        alarm_id, raw_fields = self.S21.build_changed_raw_fields()
         if alarm_id is None:
             QMessageBox.warning(self, "未选择告警", "请先在告警列表中选择一条告警。")
             return
@@ -4599,32 +4642,126 @@ class Edit(Ui_Form, QWidget):
             QMessageBox.warning(self, "告警未读取", "请先读取并选中告警，确认右侧参数已刷新后再写入。")
             return
         if not raw_fields:
-            QMessageBox.warning(self, "无可写入字段", "当前告警没有可写入参数。")
+            self.S21.set_status_text("当前告警参数没有变化，无需写入。")
+            return
+        transfer = self.alarm_parameter_transfer
+        transfer.start_write(alarm_id, raw_fields)
+        self.alarm_transfer_completion_handled = False
+        self.alarm_transfer_last_phase = transfer.phase
+        self.S21.set_transfer_progress(
+            transfer.progress(),
+            f"正在写入 {len(raw_fields)} 个变化字段，完成后自动回读校验。",
+        )
+        self.send_time1.start(ALARM_PARAMETER_TIMER_INTERVAL_MS)
+
+
+    def _process_alarm_parameter_transfer(self):
+        transfer = getattr(self, "alarm_parameter_transfer", None)
+        if transfer is None:
+            self.send_time1.stop()
+            return
+        if not self._alarm_parameter_ready(show_dialog=False):
+            transfer.cancel()
+            self.send_time1.stop()
+            self.S21.set_transfer_progress(transfer.progress(), "CAN连接不可用，告警参数传输已停止。")
             return
 
-        base_id = config["Glaoal_Index_alarm"] + alarm_id * 32
-        pending = {}
-        for field_index, raw_value in sorted(raw_fields.items()):
-            data_id = base_id + int(field_index)
-            raw_value = int(raw_value) & 0xFFFF
+        burst = ALARM_PARAMETER_WRITE_BURST if transfer.phase == "write" else ALARM_PARAMETER_REQUEST_BURST
+        actions = transfer.next_actions(
+            burst=burst,
+            max_in_flight=ALARM_PARAMETER_MAX_IN_FLIGHT,
+        )
+        for action in actions:
+            data_id = int(action["data_id"])
             data = [
                 data_id & 0xFF,
                 (data_id >> 8) & 0xFF,
                 (data_id >> 16) & 0xFF,
                 (data_id >> 24) & 0xFF,
-                raw_value & 0xFF,
-                (raw_value >> 8) & 0xFF,
+                0,
+                0,
                 0,
                 0,
             ]
-            pending[data_id] = field_index
-            self.SetData(self._active_cluster_index(), data)
-            time.sleep(0.003)
+            if action["kind"] == "write":
+                raw_value = int(action["value"]) & 0xFFFF
+                data[4] = raw_value & 0xFF
+                data[5] = (raw_value >> 8) & 0xFF
+                self.SetData(self._active_cluster_index(), data)
+            else:
+                self.QueryData(self._active_cluster_index(), data)
 
-        self.pending_alarm_writes = pending
-        self.pending_alarm_write_failed = 0
-        self.AlarmIndex = base_id
-        self.S21.set_status_text(f"已发送 {len(pending)} 个告警参数写入请求，等待下位机确认。")
+        if self.alarm_transfer_last_phase != transfer.phase:
+            self.alarm_transfer_last_phase = transfer.phase
+            if transfer.phase == "verify":
+                self.S21.set_status_text("写入应答已处理，正在回读变化字段进行一致性校验。")
+        self.S21.set_transfer_progress(transfer.progress())
+        self._finish_alarm_parameter_transfer_if_ready()
+
+
+    def _handle_alarm_parameter_read_response(self, data_id, raw_value, success=True):
+        transfer = getattr(self, "alarm_parameter_transfer", None)
+        if transfer is None:
+            return
+        event = transfer.accept_read(data_id, raw_value, success=success)
+        if event is None:
+            return
+        alarm_id = event["alarm_id"]
+        field_index = event["field_index"]
+        if event["success"]:
+            if 0 <= alarm_id < len(Alarm_list) and 0 <= field_index < len(Alarm_list[alarm_id]):
+                Alarm_list[alarm_id][field_index] = event["raw_value"]
+            self.S21.update_alarm_field(alarm_id, field_index, event["raw_value"])
+        self.S21.set_transfer_progress(transfer.progress())
+        self._finish_alarm_parameter_transfer_if_ready()
+
+
+    def _handle_alarm_parameter_write_response(self, data_id, success=True):
+        transfer = getattr(self, "alarm_parameter_transfer", None)
+        if transfer is None or not transfer.accept_write(data_id, success=success):
+            return
+        self.S21.set_transfer_progress(transfer.progress())
+        self._finish_alarm_parameter_transfer_if_ready()
+
+
+    def _finish_alarm_parameter_transfer_if_ready(self):
+        transfer = self.alarm_parameter_transfer
+        if transfer.phase != "complete" or self.alarm_transfer_completion_handled:
+            return
+        self.alarm_transfer_completion_handled = True
+        self.send_time1.stop()
+        progress = transfer.progress()
+        failures = dict(transfer.failures)
+        if transfer.operation == "summary":
+            message = f"告警摘要读取完成，共处理 {progress['completed']} 个字段"
+        elif transfer.operation == "detail":
+            alarm_id = transfer.target_alarm_id
+            if alarm_id is not None and transfer.is_record_complete(alarm_id):
+                self.S21.update_alarm_row(alarm_id, transfer.raw_record(alarm_id))
+            message = "选中告警完整参数读取完成"
+        else:
+            alarm_id = transfer.target_alarm_id
+            if alarm_id is not None:
+                for field_index, raw_value in transfer.cache.get(alarm_id, {}).items():
+                    self.S21.update_alarm_field(alarm_id, field_index, raw_value)
+            message = "告警参数写入并回读校验成功"
+
+        if failures:
+            field_text = ", ".join(
+                str(transfer.decode_data_id(data_id)[1])
+                for data_id in sorted(failures)
+                if transfer.decode_data_id(data_id) is not None
+            )
+            if transfer.operation == "write":
+                message = (
+                    f"写入或回读校验失败字段: {field_text}。"
+                    "请确认下位机处于工装/模拟测试模式，并检查参数范围。"
+                )
+            else:
+                message += f"，失败 {len(failures)} 项，可重新读取。"
+        else:
+            message += "。"
+        self.S21.set_transfer_progress(progress, message)
 
 
     def on_alarm_parameter_save_flash(self):
@@ -4857,43 +4994,7 @@ class Edit(Ui_Form, QWidget):
 
 
     def RequestAlarmData(self):
-        global g_index
-
-        if not getattr(self, "can_ready", False):
-            if getattr(self, "send_time1", None) is not None:
-                self.send_time1.stop()
-            return
-        self._update_can_link_health()
-        if getattr(self, "send_time1", None) is not None:
-            interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
-            if self.send_time1.interval() != interval:
-                self.send_time1.setInterval(interval)
-        Cindex = self._active_cluster_index()
-        if Cindex <= 0:
-            return
-        request_limit = getattr(self, "alarm_request_limit", self.S21.alarm_count() * 32)
-        if g_index >= request_limit:
-            if getattr(self, "send_time1", None) is not None:
-                self.send_time1.stop()
-            return
-
-        data_id = config["Glaoal_Index_alarm"] + g_index
-        b1 = data_id & 0xFF
-        b2 = (data_id >> 8) & 0xFF
-        b3 = (data_id >> 16) & 0xFF
-        b4 = (data_id >> 24) & 0xFF
-        data = [b1,b2,b3,b4,0,0,0,0]
-
-        if Cindex==0:
-            self._transmit_can_frame(0x188000F2, data, extern_flag=True, data_len=8)
-        if Cindex != 0:
-            self._transmit_can_frame(0x1880A0F2 + ((Cindex-1) << 8), data, extern_flag=True, data_len=8)
-
-        g_index = g_index+1
-        if g_index >= request_limit:
-            if getattr(self, "send_time1", None) is not None:
-                self.send_time1.stop()
-            self.S21.set_status_text("告警参数读取请求已发送完成，等待下位机响应刷新表格。")
+        self._process_alarm_parameter_transfer()
 
 
 

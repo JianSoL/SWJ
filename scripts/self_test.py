@@ -653,6 +653,58 @@ def test_power_diagnostics():
         app.quit()
 
 
+def test_alarm_parameter_transfer():
+    from application.alarm_parameter_transfer import AlarmParameterTransfer
+
+    transfer = AlarmParameterTransfer(0x94900, 47, response_timeout_s=0.1, max_retries=1)
+    transfer.start_summary([0, 2])
+    _assert(transfer.progress()["total"] == 20, "summary should request ten fields per alarm")
+    actions = transfer.next_actions(now=1.0, burst=3, max_in_flight=12)
+    _assert(len(actions) == 3, "summary scheduler burst mismatch")
+    for action in actions:
+        transfer.accept_read(action["data_id"], action["field_index"] + 100, success=True)
+    _assert(transfer.progress()["completed"] == 3, "summary response progress mismatch")
+
+    transfer.start_detail(1)
+    while transfer.is_busy():
+        actions = transfer.next_actions(now=2.0, burst=6, max_in_flight=12)
+        _assert(actions, "detail scheduler stalled")
+        for action in actions:
+            transfer.accept_read(action["data_id"], action["field_index"], success=True)
+    _assert(transfer.is_record_complete(1), "detail read should cache all 30 valid fields")
+
+    transfer.start_write(1, {0: 321, 5: 45})
+    write_actions = transfer.next_actions(now=3.0, burst=2, max_in_flight=4)
+    _assert([action["kind"] for action in write_actions] == ["write", "write"], "write queue mismatch")
+    for action in write_actions:
+        transfer.accept_write(action["data_id"], success=True)
+    _assert(transfer.phase == "verify", "successful writes should enter readback verification")
+    verify_actions = transfer.next_actions(now=3.1, burst=2, max_in_flight=4)
+    for action in verify_actions:
+        transfer.accept_read(action["data_id"], transfer.expected[action["data_id"]], success=True)
+    _assert(transfer.phase == "complete", "verified write should complete")
+    _assert(not transfer.failures, "verified write should have no failures")
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    from UI.T28 import MainWindow as AlarmParameterPage
+
+    created_app = QApplication.instance() is None
+    app = QApplication.instance() or QApplication([])
+    page = AlarmParameterPage()
+    try:
+        page.select_alarm(0)
+        page.update_alarm_row(0, [0] * 30)
+        _assert(page.has_complete_current_record(), "full alarm record should enable editing")
+        page.level_boxes[1].setValue(123)
+        alarm_id, changed = page.build_changed_raw_fields()
+        _assert(alarm_id == 0 and changed == {0: 123}, "write should include changed fields only")
+    finally:
+        page.close()
+    if created_app:
+        app.quit()
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -1268,6 +1320,7 @@ def main():
         test_dbc_parser,
         test_index_catalog_and_browser,
         test_power_diagnostics,
+        test_alarm_parameter_transfer,
         test_main_window_offscreen_logging,
     ]
     failures = []
