@@ -801,6 +801,12 @@ def test_main_window_offscreen_logging():
             window.power_diagnostic_last_request_monotonic = time.monotonic()
             sent_monitor_queries = []
             window.QueryData = lambda cluster_index, data: sent_monitor_queries.append((cluster_index, list(data)))
+            window._start_can_timers()
+            _assert(window.timerRealtimeMonitor.isActive(), "realtime UI timer should restart with CAN")
+            _assert(window.timerActiveAlarm.isActive(), "active alarm UI timer should restart with CAN")
+            _assert(window.timerPowerDiagnostic.isActive(), "diagnostic UI timer should restart with CAN")
+            window._stop_can_timers()
+
             window.RequestBCUVAR()
             _assert(
                 len(sent_monitor_queries) == main_module.CAN_REQUEST_BURST_PER_TICK,
@@ -842,6 +848,17 @@ def test_main_window_offscreen_logging():
                     window.cluster_page_signal_ids
                 ),
                 "cluster page queue should not duplicate shared trend requests",
+            )
+            sent_monitor_queries.clear()
+            window.power_diagnostic_query_index = 9
+            window.on_tab_changed(window._power_diagnostic_tab_index())
+            _assert(len(sent_monitor_queries) == 1, "entering diagnostic page should request immediately")
+            entered_diagnostic_id = sum(
+                sent_monitor_queries[0][1][offset] << (8 * offset) for offset in range(4)
+            )
+            _assert(
+                entered_diagnostic_id == main_module.VAR_SYS_RUN_STATUS,
+                "diagnostic page entry should restart from the run-state index",
             )
             sent_monitor_queries.clear()
             window.power_diagnostic_query_index = 0

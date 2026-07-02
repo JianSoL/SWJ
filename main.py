@@ -2334,22 +2334,28 @@ class Edit(Ui_Form, QWidget):
             timer.setInterval(max(200, int(interval_ms)))
 
 
-    def on_power_diagnostic_refresh(self):
+    def _activate_power_diagnostic_refresh(self, manual=False):
         page = getattr(self, "S32", None)
         cluster_index = self._active_cluster_index()
         if page is None:
-            return
+            return False
+        self._refresh_power_diagnostic_page()
         if not getattr(self, "can_ready", False) or getattr(self, "c", None) is None:
             page.set_status_text("CAN未连接，无法刷新上下电诊断。", failed=True)
-            return
+            return False
         if cluster_index <= 0:
             page.set_status_text("请先选择已编制的目标簇。", failed=True)
-            return
+            return False
         self.power_diagnostic_query_index = 0
         self.power_diagnostic_last_request_monotonic = 0.0
-        page.set_status_text("已重置诊断轮询，正在获取最新证据...")
+        action = "手动刷新" if manual else "进入页面"
+        page.set_status_text(f"{action}，正在自动获取最新诊断证据...")
         self._request_power_diagnostic_background(force=True)
-        self._refresh_power_diagnostic_page()
+        return True
+
+
+    def on_power_diagnostic_refresh(self):
+        self._activate_power_diagnostic_refresh(manual=True)
 
 
     def _host_control_snapshot_cache(self):
@@ -2942,6 +2948,15 @@ class Edit(Ui_Form, QWidget):
         self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
         self.send_time1.stop()
         self.timer1.start(CAN_REQUEST_NORMAL_INTERVAL_MS)
+        realtime_timer = getattr(self, "timerRealtimeMonitor", None)
+        if realtime_timer is not None:
+            realtime_timer.start(REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS)
+        active_alarm_timer = getattr(self, "timerActiveAlarm", None)
+        if active_alarm_timer is not None:
+            active_alarm_timer.start(self.S28.refresh_interval_ms())
+        diagnostic_timer = getattr(self, "timerPowerDiagnostic", None)
+        if diagnostic_timer is not None:
+            diagnostic_timer.start(self.S32.refresh_interval_ms())
         if self._logging_enabled():
             self._ensure_session_log_manager().set_enabled(True)
             self._attach_log_manager_to_can()
@@ -3286,7 +3301,7 @@ class Edit(Ui_Form, QWidget):
             if index == self._system_kline_tab_index():
                 self.S31.refresh_active_chart(force=True)
             if index == self._power_diagnostic_tab_index():
-                self._refresh_power_diagnostic_page()
+                self._activate_power_diagnostic_refresh()
 
 
 
