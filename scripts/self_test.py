@@ -738,9 +738,11 @@ def test_main_window_offscreen_logging():
         window.show()
         current_page = window.tabWidget.currentWidget()
         window._defer_visible_page_repaint()
-        _assert(not current_page.updatesEnabled(), "receive batch should suspend visible page repaint")
-        app.processEvents()
-        _assert(current_page.updatesEnabled(), "visible page repaint should resume on the next event turn")
+        _assert(current_page.updatesEnabled(), "receive batching must not disable the visible page")
+        _assert(window._visible_page_repaint_pending, "receive batching should coalesce repaint requests")
+        window._resume_page_updates(current_page)
+        _assert(not window._visible_page_repaint_pending, "coalesced repaint should clear its pending state")
+        _assert(current_page.updatesEnabled(), "coalesced repaint must keep the visible page enabled")
         for width, height in ((1024, 640), (1280, 720), (1366, 768), (1440, 900), (1920, 1080)):
             window.resize(width, height)
             for _ in range(3):

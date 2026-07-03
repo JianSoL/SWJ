@@ -64,6 +64,7 @@ CAN_LOWER_SILENCE_TIMEOUT_S = 3.0
 CAN_SILENT_DIAG_TIMEOUT_S = 0.35
 REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 100
 CELL_PAGE_REFRESH_INTERVAL_S = 0.05
+VISIBLE_PAGE_REPAINT_COALESCE_MS = 50
 SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.2
 SYSTEM_KLINE_FOREGROUND_INTERVAL_S = 0.05
 LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
@@ -520,6 +521,8 @@ class Edit(Ui_Form, QWidget):
 
         self.frame_status_label = QLabel("RX: 0", bus_parent)
         self.frame_status_label.setObjectName("statusPill")
+        self.frame_status_label.setFixedWidth(116)
+        self.frame_status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         bus_layout.addWidget(self.frame_status_label)
 
         self.system_config_button = QPushButton("系统配置", action_parent)
@@ -1306,16 +1309,21 @@ class Edit(Ui_Form, QWidget):
     def _defer_visible_page_repaint(self):
         tab_widget = getattr(self, "tabWidget", None)
         page = tab_widget.currentWidget() if tab_widget is not None else None
-        if page is None or not page.updatesEnabled():
+        if page is None or getattr(self, "_visible_page_repaint_pending", False):
             return
-        page.setUpdatesEnabled(False)
-        QTimer.singleShot(0, lambda page=page: self._resume_page_updates(page))
+        self._visible_page_repaint_pending = True
+        QTimer.singleShot(
+            VISIBLE_PAGE_REPAINT_COALESCE_MS,
+            lambda page=page: self._resume_page_updates(page),
+        )
 
 
     def _resume_page_updates(self, page):
+        self._visible_page_repaint_pending = False
         try:
-            page.setUpdatesEnabled(True)
-            page.update()
+            tab_widget = getattr(self, "tabWidget", None)
+            if tab_widget is not None and tab_widget.currentWidget() is page:
+                page.update()
         except RuntimeError:
             pass
 
@@ -3109,6 +3117,7 @@ class Edit(Ui_Form, QWidget):
         self.can_connected_monotonic = 0.0
         self.last_can_rx_monotonic = 0.0
         self.can_link_silent = False
+        self._visible_page_repaint_pending = False
         self.connected_can_status_text = "CAN: 已连接"
         self.c = None
         self._cluster_syncing = False
