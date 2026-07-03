@@ -111,27 +111,34 @@ def benchmark_request_scheduler(app):
     window.can_ready = True
     window.QueryData = record_query
     window.table_index = window._realtime_monitor_tab_index()
+    request_interval_ms = window._request_timer_target_interval()
+    request_burst = window._foreground_request_burst()
     simulated_clock = [100.0]
-    ticks = int(12.0 / (main_module.CAN_REQUEST_NORMAL_INTERVAL_MS / 1000.0))
+    ticks = int(12.0 / (request_interval_ms / 1000.0))
     with patch.object(main_module.time, "monotonic", lambda: simulated_clock[0]):
         for tick in range(ticks):
-            simulated_clock[0] = 100.0 + tick * (main_module.CAN_REQUEST_NORMAL_INTERVAL_MS / 1000.0)
+            simulated_clock[0] = 100.0 + tick * (request_interval_ms / 1000.0)
             window.last_can_rx_monotonic = simulated_clock[0]
             window.can_connected_monotonic = simulated_clock[0]
             window.RequestBCUVAR()
 
-    page_request_limit = ticks * main_module.CAN_REQUEST_BURST_PER_TICK
+    page_request_limit = ticks * request_burst
     shared_request_limit = int(12.0 / main_module.SYSTEM_KLINE_BACKGROUND_INTERVAL_S) + 2
     _require(
         query_count <= page_request_limit + shared_request_limit,
         "request scheduler exceeded page and shared-signal load budget",
     )
+    request_rate = query_count / 12.0
+    _require(request_rate <= 180.0, "foreground request scheduler exceeded CAN load ceiling")
     window.close()
     app.processEvents()
     return {
         "request_ticks": ticks,
         "request_count": query_count,
         "request_budget": page_request_limit + shared_request_limit,
+        "foreground_request_interval_ms": request_interval_ms,
+        "foreground_request_burst": request_burst,
+        "foreground_request_rate": request_rate,
     }
 
 

@@ -869,18 +869,47 @@ def test_main_window_offscreen_logging():
             _assert(window.timerRealtimeMonitor.isActive(), "realtime UI timer should restart with CAN")
             _assert(window.timerActiveAlarm.isActive(), "active alarm UI timer should restart with CAN")
             _assert(window.timerPowerDiagnostic.isActive(), "diagnostic UI timer should restart with CAN")
+            _assert(
+                window.timer1.interval() == main_module.CAN_REQUEST_FOREGROUND_INTERVAL_MS,
+                "visible request-driven page should use the foreground request interval",
+            )
+            _assert(
+                window.send_time.interval() == main_module.CAN_RX_FOREGROUND_INTERVAL_MS,
+                "visible data page should use the foreground receive interval",
+            )
             window._stop_can_timers()
 
             window.RequestBCUVAR()
             _assert(
-                len(sent_monitor_queries) == main_module.CAN_REQUEST_BURST_PER_TICK,
+                len(sent_monitor_queries) == main_module.CAN_REQUEST_FOREGROUND_BURST_PER_TICK,
                 "realtime monitor request should batch multiple indexes per tick",
             )
             _assert(
-                window.realtime_monitor_query_index == main_module.CAN_REQUEST_BURST_PER_TICK,
+                window.realtime_monitor_query_index
+                == main_module.CAN_REQUEST_FOREGROUND_BURST_PER_TICK % len(window.realtime_monitor_signal_ids),
                 "realtime monitor query cursor should advance by request burst",
             )
+            window.table_index = window._balance_control_tab_index()
+            window._apply_page_refresh_profile()
+            window.system_kline_last_request_monotonic = time.monotonic()
+            window.power_diagnostic_last_critical_request_monotonic = time.monotonic()
+            window.power_diagnostic_last_static_request_monotonic = time.monotonic()
+            sent_monitor_queries.clear()
+            window.RequestBCUVAR()
+            _assert(
+                len(sent_monitor_queries) == 2,
+                "visible balance-control page should continuously request both balance words",
+            )
             window.table_index = window._history_log_tab_index()
+            window._apply_page_refresh_profile()
+            _assert(
+                window.timer1.interval() == main_module.CAN_REQUEST_NORMAL_INTERVAL_MS,
+                "background page should release the foreground request interval",
+            )
+            _assert(
+                window.send_time.interval() == main_module.CAN_RX_POLL_INTERVAL_MS,
+                "background page should release the foreground receive interval",
+            )
             window.system_kline_query_index = 0
             window.system_kline_last_request_monotonic = 0.0
             sent_monitor_queries.clear()

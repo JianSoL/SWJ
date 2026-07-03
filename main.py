@@ -53,16 +53,19 @@ CMD_DECODE_SECU = 0xA0
 RESP_DECODE_SECU = 0xA1
 
 CAN_RX_POLL_INTERVAL_MS = 50
+CAN_RX_FOREGROUND_INTERVAL_MS = 20
 CAN_RX_WAIT_TIMEOUT_MS = 0
 CAN_REQUEST_NORMAL_INTERVAL_MS = 50
+CAN_REQUEST_FOREGROUND_INTERVAL_MS = 25
 CAN_REQUEST_SILENT_INTERVAL_MS = 1000
 CAN_REQUEST_BURST_PER_TICK = 3
-CAN_CELL_REQUEST_BURST_PER_TICK = 3
+CAN_REQUEST_FOREGROUND_BURST_PER_TICK = 4
 CAN_LOWER_SILENCE_TIMEOUT_S = 3.0
 CAN_SILENT_DIAG_TIMEOUT_S = 0.35
-REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 200
-CELL_PAGE_REFRESH_INTERVAL_S = 0.2
+REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 100
+CELL_PAGE_REFRESH_INTERVAL_S = 0.05
 SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.2
+SYSTEM_KLINE_FOREGROUND_INTERVAL_S = 0.05
 LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
 RX_STATUS_UI_INTERVAL_S = 0.25
 POWER_DIAGNOSTIC_VISIBLE_REQUEST_INTERVAL_S = 0.05
@@ -1338,11 +1341,65 @@ class Edit(Ui_Form, QWidget):
         return getattr(self, "connected_can_status_text", "CAN: 已连接")
 
 
+    def _foreground_request_tab_indices(self):
+        return {
+            self.CLUSTER_TAB_INDEX,
+            self._current_bau_tab_index(),
+            self._balance_tab_index(),
+            self._balance_control_tab_index(),
+            self._realtime_monitor_tab_index(),
+            self._abnormal_cell_tab_index(),
+            self._power_diagnostic_tab_index(),
+        }
+
+
+    def _foreground_receive_tab_indices(self):
+        return self._foreground_request_tab_indices() | {
+            self._voltage_tab_index(),
+            self._temperature_tab_index(),
+            self._alarm_tab_index(),
+            self._active_alarm_tab_index(),
+            self._control_tab_index(),
+            self._balance_control_tab_index(),
+            self._cell_visualization_tab_index(),
+            self._system_kline_tab_index(),
+        }
+
+
+    def _foreground_request_burst(self):
+        if getattr(self, "table_index", None) in self._foreground_request_tab_indices():
+            return CAN_REQUEST_FOREGROUND_BURST_PER_TICK
+        return CAN_REQUEST_BURST_PER_TICK
+
+
+    def _request_timer_target_interval(self):
+        if self._is_can_link_silent():
+            return CAN_REQUEST_SILENT_INTERVAL_MS
+        if getattr(self, "table_index", None) in self._foreground_request_tab_indices():
+            return CAN_REQUEST_FOREGROUND_INTERVAL_MS
+        return CAN_REQUEST_NORMAL_INTERVAL_MS
+
+
+    def _receive_timer_target_interval(self):
+        if getattr(self, "table_index", None) in self._foreground_receive_tab_indices():
+            return CAN_RX_FOREGROUND_INTERVAL_MS
+        return CAN_RX_POLL_INTERVAL_MS
+
+
+    def _apply_page_refresh_profile(self):
+        receive_timer = getattr(self, "send_time", None)
+        if receive_timer is not None:
+            receive_interval = self._receive_timer_target_interval()
+            if receive_timer.interval() != receive_interval:
+                receive_timer.setInterval(receive_interval)
+        self._update_request_timer_interval()
+
+
     def _update_request_timer_interval(self):
         timer = getattr(self, "timer1", None)
         if timer is None:
             return
-        interval = CAN_REQUEST_SILENT_INTERVAL_MS if self._is_can_link_silent() else CAN_REQUEST_NORMAL_INTERVAL_MS
+        interval = self._request_timer_target_interval()
         if timer.interval() != interval:
             timer.setInterval(interval)
 
@@ -2950,13 +3007,13 @@ class Edit(Ui_Form, QWidget):
 
 
     def _start_can_timers(self):
-        self.send_time.start(CAN_RX_POLL_INTERVAL_MS)
+        self.send_time.start(self._receive_timer_target_interval())
         transfer = getattr(self, "alarm_parameter_transfer", None)
         if transfer is not None and transfer.is_busy():
             self.send_time1.start(ALARM_PARAMETER_TIMER_INTERVAL_MS)
         else:
             self.send_time1.stop()
-        self.timer1.start(CAN_REQUEST_NORMAL_INTERVAL_MS)
+        self.timer1.start(self._request_timer_target_interval())
         realtime_timer = getattr(self, "timerRealtimeMonitor", None)
         if realtime_timer is not None:
             realtime_timer.start(REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS)
@@ -3296,12 +3353,37 @@ class Edit(Ui_Form, QWidget):
 
 
 
+    def _refresh_visible_cell_data_page(self, index):
+        if index == self._voltage_tab_index():
+            self.S18.setVoltageValues(Vres)
+            self.last_dy_time = 0.0
+        elif index == self._balance_tab_index():
+            self.S19.setVoltageValues(VresBAL)
+            self.last_bal_time = 0.0
+        elif index == self._temperature_tab_index():
+            self.S20.setVoltageValues(VresTem)
+            self.last_tem_time = 0.0
+        elif index == self._abnormal_cell_tab_index():
+            self.S24.setVoltageValues(VresDXYC)
+            self.last_dx_time = 0.0
+        elif index == self._balance_control_tab_index():
+            self.S25.set_values(VresBAL)
+            self.last_bal_time = 0.0
+        elif index == self._cell_visualization_tab_index():
+            self.S30.set_voltage_values(Vres)
+            self.S30.set_temperature_values(VresTem)
+            self.last_dy_time = 0.0
+            self.last_tem_time = 0.0
+
+
     def on_tab_changed(self, index):
         # 触发的函数：根据选中的标签页输出信息
         if index == self.ZERO_TAB_INDEX or self._is_hidden_cluster_tab_index(index):
             self.tabWidget.setCurrentIndex(self.CLUSTER_TAB_INDEX)
             return
         self.table_index = index
+        self._apply_page_refresh_profile()
+        self._refresh_visible_cell_data_page(index)
         if index != self.CLUSTER_TAB_INDEX:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():
@@ -4075,13 +4157,18 @@ class Edit(Ui_Form, QWidget):
                         if byte0 < int(config["LECU_NUM"])*int(config["CELL_NUM"])-2:
                             Vres[(byte1 * 256 + byte0 + 2)&0x3FF] = byte7 * 256 + byte6
 
+                    self.voltage_snapshot_dirty = True
+                    visible_voltage_page = self.table_index in (
+                        self._voltage_tab_index(),
+                        self._cell_visualization_tab_index(),
+                    )
                     now = time.time()
-                    if now - self.last_dy_time > CELL_PAGE_REFRESH_INTERVAL_S:
+                    if visible_voltage_page and now - self.last_dy_time > CELL_PAGE_REFRESH_INTERVAL_S:
                         self.last_dy_time = now
-                        self.S18.setVoltageValues(Vres)
-                        if self.table_index == self._cell_visualization_tab_index():
+                        if self.table_index == self._voltage_tab_index():
+                            self.S18.setVoltageValues(Vres)
+                        else:
                             self.S30.set_voltage_values(Vres)
-                        self.voltage_snapshot_dirty = True
 
 
             voltage_cluster_index = self._cluster_index_for_can_id(ID, "0x1235EF")
@@ -4175,13 +4262,18 @@ class Edit(Ui_Form, QWidget):
                         if byte0 < int(config["LECU_NUM"]) * int(config["CELL_Tem_NUM"]) - 2:
                             VresTem[(byte1 * 256 + byte0 + 2)&0x3FF] = Unsignal_Change(byte7 * 256 + byte6)
 
+                    self.temperature_snapshot_dirty = True
+                    visible_temperature_page = self.table_index in (
+                        self._temperature_tab_index(),
+                        self._cell_visualization_tab_index(),
+                    )
                     now = time.time()
-                    if now - self.last_tem_time > CELL_PAGE_REFRESH_INTERVAL_S:
+                    if visible_temperature_page and now - self.last_tem_time > CELL_PAGE_REFRESH_INTERVAL_S:
                         self.last_tem_time = now
-                        self.S20.setVoltageValues(VresTem)
-                        if self.table_index == self._cell_visualization_tab_index():
+                        if self.table_index == self._temperature_tab_index():
+                            self.S20.setVoltageValues(VresTem)
+                        else:
                             self.S30.set_temperature_values(VresTem)
-                        self.temperature_snapshot_dirty = True
 
 
 
@@ -4209,13 +4301,18 @@ class Edit(Ui_Form, QWidget):
                                 if (j>=16) and (j<32):
                                     VresBAL[cell_index] = (self.LECU_HIGH[i] >>( j-16)) & 0x01
                                     cell_index = cell_index + 1
+                        self.balance_snapshot_dirty = True
+                        visible_balance_page = self.table_index in (
+                            self._balance_tab_index(),
+                            self._balance_control_tab_index(),
+                        )
                         now = time.time()
-                        if now - self.last_bal_time > CELL_PAGE_REFRESH_INTERVAL_S:
+                        if visible_balance_page and now - self.last_bal_time > CELL_PAGE_REFRESH_INTERVAL_S:
                             self.last_bal_time = now
-                            self.S19.setVoltageValues(VresBAL)
-                            if hasattr(self, "S25"):
+                            if self.table_index == self._balance_tab_index():
+                                self.S19.setVoltageValues(VresBAL)
+                            else:
                                 self.S25.set_values(VresBAL)
-                            self.balance_snapshot_dirty = True
 
 
             # 电芯异常
@@ -4227,11 +4324,14 @@ class Edit(Ui_Form, QWidget):
                         if bauvarid==ABNORM_ADDR + i * 320 + j:
                             VresDXYC[i*config["CELL_NUM"]+j] = byte4 + byte5 * 256
 
+                self.abnormal_snapshot_dirty = True
                 now = time.time()
-                if now - self.last_dx_time > CELL_PAGE_REFRESH_INTERVAL_S:
+                if (
+                    self.table_index == self._abnormal_cell_tab_index()
+                    and now - self.last_dx_time > CELL_PAGE_REFRESH_INTERVAL_S
+                ):
                     self.last_dx_time = now
                     self.S24.setVoltageValues(VresDXYC)
-                    self.abnormal_snapshot_dirty = True
 
 
 
@@ -5125,7 +5225,7 @@ class Edit(Ui_Form, QWidget):
         self._update_can_link_health()
         if self.table_index == self._current_bau_tab_index():
 
-            for i in range(CAN_REQUEST_BURST_PER_TICK):
+            for _ in range(self._foreground_request_burst()):
                 # 请求剩余充电时间上半簇
 
                 data = self.BAUSignalQ[self.BAUSignalQ_index]
@@ -5172,7 +5272,12 @@ class Edit(Ui_Form, QWidget):
             return
         now = time.monotonic()
         last_request = float(getattr(self, "system_kline_last_request_monotonic", 0.0))
-        if last_request and now - last_request < SYSTEM_KLINE_BACKGROUND_INTERVAL_S:
+        interval = (
+            SYSTEM_KLINE_FOREGROUND_INTERVAL_S
+            if getattr(self, "table_index", None) == self._system_kline_tab_index()
+            else SYSTEM_KLINE_BACKGROUND_INTERVAL_S
+        )
+        if last_request and now - last_request < interval:
             return
         signal_ids = SYSTEM_KLINE_SHARED_SIGNAL_IDS
         cursor = int(getattr(self, "system_kline_query_index", 0)) % len(signal_ids)
@@ -5254,7 +5359,7 @@ class Edit(Ui_Form, QWidget):
             index = self._active_cluster_index()
             signal_ids = getattr(self, "realtime_monitor_signal_ids", ())
             if index > 0 and signal_ids:
-                for _ in range(CAN_REQUEST_BURST_PER_TICK):
+                for _ in range(self._foreground_request_burst()):
                     data = signal_ids[self.realtime_monitor_query_index]
                     data = [data&0xFF, (data>>8)&0xFF,  (data>>16)&0xFF,  (data>>24)&0xFF, 0, 0, 0, 0]
                     self.QueryData(index,data)
@@ -5264,7 +5369,7 @@ class Edit(Ui_Form, QWidget):
         if self.table_index == self.CLUSTER_TAB_INDEX:
             index = self._active_cluster_index()
             signal_ids = getattr(self, "cluster_page_signal_ids", ())
-            for i in range(CAN_REQUEST_BURST_PER_TICK if signal_ids else 0):
+            for _ in range(self._foreground_request_burst() if signal_ids else 0):
                 #请求剩余充电时间上半簇
 
                 data = signal_ids[self.BCUSignalQ_index]
@@ -5273,7 +5378,7 @@ class Edit(Ui_Form, QWidget):
                 self.BCUSignalQ_index = (self.BCUSignalQ_index+1)%len(signal_ids)
 
 
-        if self.table_index == self._balance_tab_index():
+        if self.table_index in (self._balance_tab_index(), self._balance_control_tab_index()):
 
             BAL_STARTE_0_15_LOW =(4126+self.BAL_index * BAL_JG_LEN)&0xFF
             BAL_STARTE_0_15_HIGH = ((4126 + self.BAL_index * BAL_JG_LEN)>>8) & 0xFF
@@ -5290,7 +5395,7 @@ class Edit(Ui_Form, QWidget):
 
         if self.table_index == self._abnormal_cell_tab_index():
             index = self._active_cluster_index()
-            for i in range(CAN_CELL_REQUEST_BURST_PER_TICK):
+            for _ in range(self._foreground_request_burst()):
                 # 请求剩余充电时间上半簇
 
                 data = self.BCUSignalQ_DXYC[self.BCUSignalQ_DXYC_index]
