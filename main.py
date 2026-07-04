@@ -1031,6 +1031,7 @@ class Edit(Ui_Form, QWidget):
         if (
             int(cluster_index) == self._active_cluster_index()
             and getattr(self, "table_index", None) == self.CLUSTER_TAB_INDEX
+            and self._active_cluster_view_index() == 1
             and time.monotonic() - float(getattr(self, "cluster_overview_last_render_monotonic", 0.0))
             >= CLUSTER_OVERVIEW_UI_REFRESH_INTERVAL_S
         ):
@@ -1080,10 +1081,19 @@ class Edit(Ui_Form, QWidget):
             store = {}
             self.cluster_custom_raw_words = store
         store.setdefault(cluster_index, {})[data_id] = raw_word
-        if cluster_index == self._active_cluster_index():
+        if (
+            cluster_index == self._active_cluster_index()
+            and getattr(self, "table_index", None) == self.CLUSTER_TAB_INDEX
+            and self._active_cluster_view_index() == 2
+        ):
             page = getattr(self, "cluster_custom_page", None)
             if page is not None:
                 page.update_raw_value(data_id, raw_word)
+
+
+    def _active_cluster_view_index(self):
+        tabs = getattr(self, "cluster_view_tabs", None)
+        return int(tabs.currentIndex()) if tabs is not None else 0
 
 
     def _rebuild_cluster_page_signal_ids(self, custom_ids=None):
@@ -1092,23 +1102,32 @@ class Edit(Ui_Form, QWidget):
             custom_ids = page.request_indexes()
         custom_ids = tuple(int(data_id) for data_id in (custom_ids or ()))
         legacy_ids = tuple(int(data_id) for data_id in getattr(self, "BCUSignalQ", ()))
+        overview_ids = tuple(int(data_id) for data_id in CLUSTER_OVERVIEW_INDEX_IDS)
+        view_index = self._active_cluster_view_index()
+        if view_index == 2:
+            ordered_ids = custom_ids + overview_ids + legacy_ids
+        elif view_index == 1:
+            ordered_ids = overview_ids + legacy_ids + custom_ids
+        else:
+            ordered_ids = legacy_ids + overview_ids + custom_ids
         self.cluster_page_signal_ids = tuple(
             data_id
-            for data_id in dict.fromkeys(
-                legacy_ids + tuple(CLUSTER_OVERVIEW_INDEX_IDS) + custom_ids
-            )
+            for data_id in dict.fromkeys(ordered_ids)
             if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
         )
-        if self.cluster_page_signal_ids:
-            self.BCUSignalQ_index = int(getattr(self, "BCUSignalQ_index", 0)) % len(
-                self.cluster_page_signal_ids
-            )
-        else:
-            self.BCUSignalQ_index = 0
+        self.BCUSignalQ_index = 0
 
 
     def on_cluster_custom_configuration_changed(self, custom_ids):
         self._rebuild_cluster_page_signal_ids(custom_ids)
+
+
+    def on_cluster_view_changed(self, view_index):
+        self._rebuild_cluster_page_signal_ids()
+        if int(view_index) == 1:
+            self._refresh_cluster_overview_page()
+        elif int(view_index) == 2:
+            self._refresh_cluster_custom_page()
 
 
     def _refresh_cluster_views(self, source=None):
@@ -3383,6 +3402,7 @@ class Edit(Ui_Form, QWidget):
         self.cluster_custom_page.configurationChanged.connect(
             self.on_cluster_custom_configuration_changed
         )
+        self.cluster_view_tabs.currentChanged.connect(self.on_cluster_view_changed)
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -3570,8 +3590,7 @@ class Edit(Ui_Form, QWidget):
         self._apply_page_refresh_profile()
         self._refresh_visible_cell_data_page(index)
         if index == self.CLUSTER_TAB_INDEX:
-            self._refresh_cluster_overview_page()
-            self._refresh_cluster_custom_page()
+            self.on_cluster_view_changed(self._active_cluster_view_index())
         if index != self.CLUSTER_TAB_INDEX:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():

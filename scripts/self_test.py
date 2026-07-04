@@ -976,6 +976,36 @@ def test_main_window_offscreen_logging():
                 set(window.cluster_custom_page.request_indexes()) - shared_ids <= queue_ids,
                 "cluster page should include enabled custom indexes",
             )
+            custom_priority = tuple(
+                data_id
+                for data_id in window.cluster_custom_page.request_indexes()
+                if data_id not in shared_ids
+            )
+            window.cluster_view_tabs.setCurrentIndex(2)
+            _assert(
+                window.cluster_page_signal_ids[: len(custom_priority)] == custom_priority,
+                "visible custom view indexes should be requested first",
+            )
+            overview_priority = tuple(
+                data_id
+                for data_id in main_module.CLUSTER_OVERVIEW_INDEX_IDS
+                if data_id not in shared_ids
+            )
+            window.cluster_view_tabs.setCurrentIndex(1)
+            _assert(
+                window.cluster_page_signal_ids[: len(overview_priority)] == overview_priority,
+                "visible 703 overview indexes should be requested first",
+            )
+            window.cluster_view_tabs.setCurrentIndex(0)
+            legacy_priority = tuple(
+                dict.fromkeys(
+                    data_id for data_id in window.BCUSignalQ if data_id not in shared_ids
+                )
+            )
+            _assert(
+                window.cluster_page_signal_ids[: len(legacy_priority)] == legacy_priority,
+                "visible full-data view should retain legacy request priority",
+            )
             window._handle_index_var_response(1, main_module.VAR_SYS_SOC, 777, True)
             _assert(
                 window.cluster_custom_raw_words[1][main_module.VAR_SYS_SOC] == 777,
