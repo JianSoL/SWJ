@@ -705,6 +705,47 @@ def test_alarm_parameter_transfer():
         app.quit()
 
 
+def test_cluster_overview_decoder():
+    from application.cluster_overview import ClusterOverviewDecoder
+
+    decoder = ClusterOverviewDecoder(False)
+    payload = bytes((0x4C, 0x1D, 0x83, 0xFF, 5, 1, 0, 0))
+    snapshot = decoder.decode_broadcast(0x1201EFA0, payload)
+    _assert(snapshot["battery_voltage"] == 750.0, "703 B-terminal voltage decode mismatch")
+    _assert(snapshot["system_current"] == -12.5, "703 signed current decode mismatch")
+    _assert(snapshot["run_status"] == 5, "703 run-state decode mismatch")
+    _assert(snapshot["insulation_finished"], "703 insulation-finished decode mismatch")
+
+    snapshot.update(decoder.decode_broadcast(0x1202EFA0, bytes((0xD2, 0x04, 0x2E, 0x16, 1, 2, 0x52, 0x03))))
+    _assert(snapshot["positive_insulation_resistance"] == 123.4, "positive insulation decode mismatch")
+    _assert(snapshot["negative_insulation_resistance"] == 567.8, "negative insulation decode mismatch")
+    _assert(snapshot["soc"] == 85.0, "703 SOC scale mismatch")
+
+    extrema = decoder.decode_broadcast(0x1209EFA0, bytes((0xD0, 0x0C, 0xA4, 0x0C, 0x07, 0x03, 0x02, 0x05)))
+    _assert(extrema["max_cell_voltage"] == 3280, "maximum cell voltage decode mismatch")
+    _assert(extrema["max_cell_voltage_position"] == "模组3 / 点位7", "voltage position decode mismatch")
+    _assert(
+        decoder.decode_index(324, 0xFF85)["average_cell_temperature"] == -12.3,
+        "signed indexed temperature decode mismatch",
+    )
+
+    neutral = ClusterOverviewDecoder(True)
+    combined = {}
+    combined.update(neutral.decode_broadcast(0x1201EFA0, bytes((0x10, 0x0E, 0x64, 0, 5, 6, 0x20, 0x0E))))
+    combined.update(neutral.decode_broadcast(0x1301EFA0, bytes((0x08, 0x0E, 0xCE, 0xFF, 0x18, 0x1C, 0x10, 0x0E))))
+    combined.update(neutral.decode_broadcast(0x1202EFA0, bytes((1, 0, 2, 0, 1, 0, 0x20, 0x03))))
+    combined.update(neutral.decode_broadcast(0x1302EFA0, bytes((1, 0, 2, 0, 1, 0, 0x84, 0x03))))
+    display = neutral.display_snapshot(combined)
+    _assert(display["soc"] == 85.0, "neutral upper/lower SOC aggregation mismatch")
+    _assert(display["allow_high_voltage"], "neutral high-voltage permission aggregation mismatch")
+    _assert(display["hall_current"] == 10.0, "neutral Hall current decode mismatch")
+    _assert(display["shunt_current"] == -5.0, "neutral shunt current decode mismatch")
+    invalid = decoder.display_snapshot({"upper_alarm_level": 10753, "pack_voltage": 6551.9})
+    _assert(invalid["alarm_level"] is None, "out-of-range alarm level should be rejected")
+    _assert(invalid["pack_voltage"] is None, "out-of-range voltage sentinel should be rejected")
+    _assert(not decoder.decode_broadcast(0x1201EFA0, b"\x00"), "short frame should be ignored")
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -776,13 +817,14 @@ def test_main_window_offscreen_logging():
             window.tabWidget.setCurrentIndex(window.CLUSTER_TAB_INDEX)
             for _ in range(2):
                 app.processEvents()
-            cluster_groups = window.cluster_section_groups[window.CLUSTER_TAB_INDEX]
+            cluster_groups = [group for group in window.S33.groups if group.isVisible()]
             _assert(all(group.width() > 0 for group in cluster_groups), "cluster overview section collapsed")
-            for left_group, right_group in zip(cluster_groups, cluster_groups[1:]):
-                _assert(
-                    not left_group.geometry().intersects(right_group.geometry()),
-                    f"cluster overview sections overlap at {width}x{height}",
-                )
+            for left_index, left_group in enumerate(cluster_groups):
+                for right_group in cluster_groups[left_index + 1:]:
+                    _assert(
+                        not left_group.geometry().intersects(right_group.geometry()),
+                        f"cluster overview sections overlap at {width}x{height}",
+                    )
 
             window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
             for _ in range(3):
@@ -845,6 +887,31 @@ def test_main_window_offscreen_logging():
 
         original_active_cluster = window._active_cluster_index()
         window._set_active_cluster(1, refresh=False, source="self_test")
+        original_cluster_has_n = main_module.config.get("Has_N", 0)
+        try:
+            window._set_has_neutral(0, persist=False, refresh=True)
+            window.cluster_overview_snapshots[1] = {}
+            window._handle_cluster_overview_broadcast(
+                1,
+                0x1201EFA0,
+                bytes((0x4C, 0x1D, 0x83, 0xFF, 5, 1, 0, 0)),
+            )
+            _assert(
+                window.cluster_overview_snapshots[1]["system_current"] == -12.5,
+                "main window should route 703 broadcast data into the selected cluster cache",
+            )
+            window._cache_cluster_overview_index_value(1, main_module.VAR_SYS_SOC, 864)
+            _assert(
+                window.cluster_overview_snapshots[1]["soc"] == 86.4,
+                "cluster overview should merge indexed foreground data into its broadcast cache",
+            )
+            _assert(
+                set(window.cluster_page_signal_ids)
+                == set(main_module.CLUSTER_OVERVIEW_INDEX_IDS) - set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS),
+                "cluster page should use the bounded 703 key-index queue",
+            )
+        finally:
+            window._set_has_neutral(original_cluster_has_n, persist=False, refresh=True)
         original_c = getattr(window, "c", None)
         original_can_ready = getattr(window, "can_ready", False)
         original_table_index = getattr(window, "table_index", 0)
@@ -1352,6 +1419,7 @@ def main():
         test_index_catalog_and_browser,
         test_power_diagnostics,
         test_alarm_parameter_transfer,
+        test_cluster_overview_decoder,
         test_main_window_offscreen_logging,
     ]
     failures = []

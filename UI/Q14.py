@@ -36,6 +36,7 @@ from .T36 import DbcParsePage as UI36
 from .T37 import CellVisualizationPage as UI37
 from .T38 import SystemKLinePage as UI38
 from .T39 import PowerDiagnosticPage as UI39
+from .T40 import ClusterOverviewPage as UI40
 from .conf import config
 from .responsive import FlowLayout
 
@@ -224,6 +225,7 @@ class Ui_Form(object):
         self.S30 = UI37()
         self.S31 = UI38()
         self.S32 = UI39()
+        self.S33 = UI40()
 
         layout = QVBoxLayout(self.tab[CU_NUM+4])
         layout.addWidget(self.S28)
@@ -334,6 +336,8 @@ class Ui_Form(object):
             self.cluster_section_groups.append(section_groups)
             self.cluster_section_splitters.append(splitter)
 
+        self.cluster_section_splitters[1].hide()
+        self.tab[1].layout().addWidget(self.S33)
         self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
 
         for i in range(0,CU_NUM+14):

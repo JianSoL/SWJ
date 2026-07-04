@@ -29,6 +29,10 @@ from application.power_diagnostics import (
     PowerDiagnosticAnalyzer,
 )
 from application.alarm_parameter_transfer import AlarmParameterTransfer
+from application.cluster_overview import (
+    CLUSTER_OVERVIEW_INDEX_IDS,
+    ClusterOverviewDecoder,
+)
 from session_logger import SessionLogManager
 from functools import partial
 from PyQt6.QtGui import QColor
@@ -65,6 +69,7 @@ CAN_SILENT_DIAG_TIMEOUT_S = 0.35
 REALTIME_MONITOR_UI_REFRESH_INTERVAL_MS = 100
 CELL_PAGE_REFRESH_INTERVAL_S = 0.05
 VISIBLE_PAGE_REPAINT_COALESCE_MS = 50
+CLUSTER_OVERVIEW_UI_REFRESH_INTERVAL_S = 0.1
 SYSTEM_KLINE_BACKGROUND_INTERVAL_S = 0.2
 SYSTEM_KLINE_FOREGROUND_INTERVAL_S = 0.05
 LOG_BACKGROUND_REQUEST_INTERVAL_S = 0.2
@@ -959,6 +964,84 @@ class Edit(Ui_Form, QWidget):
             table.clearContents()
 
 
+    def _initialize_cluster_overview_state(self):
+        self.cluster_overview_decoder = ClusterOverviewDecoder(bool(config.get("Has_N", 0)))
+        self.cluster_overview_snapshots = {
+            int(cluster_index): {}
+            for cluster_index, _address in getattr(self, "cluster_options", [])
+            if int(cluster_index) > 0
+        }
+        self.cluster_overview_last_render_monotonic = 0.0
+        page = getattr(self, "S33", None)
+        if page is not None:
+            page.set_has_neutral(bool(config.get("Has_N", 0)))
+
+
+    def _cluster_overview_cache(self, cluster_index):
+        store = getattr(self, "cluster_overview_snapshots", None)
+        if store is None:
+            self._initialize_cluster_overview_state()
+            store = self.cluster_overview_snapshots
+        return store.setdefault(int(cluster_index), {})
+
+
+    def _refresh_cluster_overview_page(self):
+        page = getattr(self, "S33", None)
+        if page is None:
+            return
+        cluster_index = self._active_cluster_index()
+        page.set_cluster_context(cluster_index, getattr(self, "selected_cluster_address", ""))
+        page.set_has_neutral(bool(config.get("Has_N", 0)))
+        if cluster_index <= 0:
+            page.clear_values()
+            page.set_status_text("当前选择00（未编制），不会解析簇广播数据。")
+            return
+        snapshot = self._cluster_overview_cache(cluster_index)
+        if not snapshot:
+            page.clear_values()
+            page.set_status_text("等待703协议广播或索引响应。")
+            return
+        display_snapshot = self.cluster_overview_decoder.display_snapshot(snapshot)
+        page.update_snapshot(display_snapshot)
+        last_update = float(snapshot.get("_last_update_monotonic", 0.0) or 0.0)
+        age = max(0.0, time.monotonic() - last_update) if last_update else 0.0
+        source = snapshot.get("_last_source", "协议")
+        page.set_status_text(f"{source}数据已更新，距今 {age:.1f} s。")
+        self.cluster_overview_last_render_monotonic = time.monotonic()
+
+
+    def _cache_cluster_overview_updates(self, cluster_index, updates, source):
+        if int(cluster_index) <= 0 or not updates:
+            return
+        snapshot = self._cluster_overview_cache(cluster_index)
+        snapshot.update(updates)
+        snapshot["_last_update_monotonic"] = time.monotonic()
+        snapshot["_last_source"] = str(source)
+        if (
+            int(cluster_index) == self._active_cluster_index()
+            and getattr(self, "table_index", None) == self.CLUSTER_TAB_INDEX
+            and time.monotonic() - float(getattr(self, "cluster_overview_last_render_monotonic", 0.0))
+            >= CLUSTER_OVERVIEW_UI_REFRESH_INTERVAL_S
+        ):
+            self._refresh_cluster_overview_page()
+
+
+    def _handle_cluster_overview_broadcast(self, cluster_index, frame_id, payload):
+        decoder = getattr(self, "cluster_overview_decoder", None)
+        if decoder is None:
+            return
+        updates = decoder.decode_broadcast(frame_id, payload)
+        self._cache_cluster_overview_updates(cluster_index, updates, "703广播")
+
+
+    def _cache_cluster_overview_index_value(self, cluster_index, data_id, raw_word):
+        decoder = getattr(self, "cluster_overview_decoder", None)
+        if decoder is None:
+            return
+        updates = decoder.decode_index(data_id, raw_word)
+        self._cache_cluster_overview_updates(cluster_index, updates, "索引")
+
+
     def _refresh_cluster_views(self, source=None):
         self._clear_cluster_buffers()
         self._clear_current_cluster_tables()
@@ -983,6 +1066,7 @@ class Edit(Ui_Form, QWidget):
                 self.S32.clear_values()
                 self.S32.set_cluster_context(0, "00")
                 self.S32.set_status_text("当前选择 00（未编制），不会请求上下电诊断数据。")
+            self._refresh_cluster_overview_page()
             return
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
@@ -1004,6 +1088,7 @@ class Edit(Ui_Form, QWidget):
                 self.on_alarm_parameter_read()
         if getattr(self, "table_index", None) == self._control_tab_index() and getattr(self, "can_ready", False):
             self._refresh_host_control_snapshot(show_status=True)
+        self._refresh_cluster_overview_page()
 
 
     def _refresh_cell_visualization_page(self):
@@ -1052,6 +1137,8 @@ class Edit(Ui_Form, QWidget):
                 self.S30.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S31"):
                 self.S31.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "S33"):
+                self.S33.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
@@ -1239,6 +1326,11 @@ class Edit(Ui_Form, QWidget):
             del blocker
         if hasattr(self, "apply_neutral_mode_labels"):
             self.apply_neutral_mode_labels(bool(normalized))
+        decoder = getattr(self, "cluster_overview_decoder", None)
+        if decoder is not None:
+            decoder.set_has_neutral(bool(normalized))
+        if hasattr(self, "S33"):
+            self.S33.set_has_neutral(bool(normalized))
 
         if persist:
             can_config = self._current_bus_config()
@@ -1246,6 +1338,10 @@ class Edit(Ui_Form, QWidget):
             self._save_bus_config(can_config)
 
         if refresh and previous != normalized:
+            if hasattr(self, "cluster_overview_snapshots"):
+                self.cluster_overview_snapshots = {
+                    cluster_index: {} for cluster_index in self.cluster_overview_snapshots
+                }
             self._reset_cluster_query_cursors()
             self._clear_cluster_buffers()
             self._clear_current_cluster_tables()
@@ -1258,6 +1354,9 @@ class Edit(Ui_Form, QWidget):
             mode_text = "带中线" if normalized else "无中线"
             if hasattr(self, "S27"):
                 self.S27.set_status_text(f"已切换为{mode_text}解析模式，等待重新刷新数据。")
+            if hasattr(self, "S33"):
+                self.S33.clear_values()
+                self.S33.set_status_text(f"已切换为{mode_text}703协议解析，等待新数据。")
 
 
     def on_has_neutral_toggled(self, checked):
@@ -1619,6 +1718,7 @@ class Edit(Ui_Form, QWidget):
         self._cache_runtime_record_index_value(cluster_index, data_id, raw_word)
         self._cache_system_kline_index_value(cluster_index, data_id, raw_word)
         self._cache_power_diagnostic_index_value(cluster_index, data_id, raw_word)
+        self._cache_cluster_overview_index_value(cluster_index, data_id, raw_word)
 
 
     def _cache_system_kline_index_value(self, cluster_index, data_id, raw_word):
@@ -3122,6 +3222,7 @@ class Edit(Ui_Form, QWidget):
         self.c = None
         self._cluster_syncing = False
         self._setup_product_controls()
+        self._initialize_cluster_overview_state()
         self._load_bus_config_controls(load_can_board_config())
         self._configure_single_cluster_tab()
         self._hide_embedded_cluster_controls()
@@ -3308,7 +3409,7 @@ class Edit(Ui_Form, QWidget):
         self.BCUSignalQ = BCUSignalQ
         self.cluster_page_signal_ids = tuple(
             data_id
-            for data_id in self.BCUSignalQ
+            for data_id in CLUSTER_OVERVIEW_INDEX_IDS
             if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
         )
         self.BCUSignalQ_index = 0
@@ -3393,6 +3494,8 @@ class Edit(Ui_Form, QWidget):
         self.table_index = index
         self._apply_page_refresh_profile()
         self._refresh_visible_cell_data_page(index)
+        if index == self.CLUSTER_TAB_INDEX:
+            self._refresh_cluster_overview_page()
         if index != self.CLUSTER_TAB_INDEX:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():
@@ -3479,6 +3582,7 @@ class Edit(Ui_Form, QWidget):
             #################################################################################################################
             #index = self.table_index
             for index in self._cluster_indices_for_frame_id(frame_obj.ID):
+                self._handle_cluster_overview_broadcast(index, frame_obj.ID, frame_data)
                 # if (("0x1881F2" + config["ADDRESLIST"][index].casefold()).casefold() == ID.casefold()):
                 #     bauvarid = byte0 + byte1 * 256 + byte2 * 256 * 256 + byte3 * 256 * 256
                 #     if ((bauvarid == 0x9040D) and (config["Has_N"])==255):
