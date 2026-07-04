@@ -746,6 +746,44 @@ def test_cluster_overview_decoder():
     _assert(not decoder.decode_broadcast(0x1201EFA0, b"\x00"), "short frame should be ignored")
 
 
+def test_cluster_custom_monitor():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+
+    from application.cluster_view_config import (
+        load_cluster_view_fields,
+        save_cluster_view_fields,
+    )
+    from UI.T41 import ClusterCustomMonitorPage
+
+    app = QApplication.instance() or QApplication([])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = Path(temp_dir) / "cluster_view.yaml"
+        fields = [
+            {"data_id": 16, "label": "SOC", "enabled": True},
+            {"data_id": 14, "label": "电流", "enabled": False},
+        ]
+        saved = save_cluster_view_fields(fields, config_path)
+        _assert(load_cluster_view_fields(config_path) == saved, "cluster view config round trip failed")
+
+        page = ClusterCustomMonitorPage(config_path=config_path)
+        _assert(page.request_indexes() == (16,), "disabled custom index should not be requested")
+        page.set_cluster_context(2, "A1")
+        page.set_snapshot({16: 865, 14: 0xFF9C})
+        _assert("86.5" in page.table.item(0, page.VALUE_COLUMN).text(), "custom SOC scaling mismatch")
+        page.table.item(1, page.ENABLED_COLUMN).setCheckState(Qt.CheckState.Checked)
+        _assert(page.request_indexes() == (16, 14), "enabled custom index was not added")
+        page.update_raw_value(14, 0xFF9C)
+        _assert("-10" in page.table.item(1, page.VALUE_COLUMN).text(), "custom signed decode mismatch")
+        _assert(page.save_configuration(), "custom monitor configuration save failed")
+        _assert(
+            tuple(field["data_id"] for field in load_cluster_view_fields(config_path)) == (16, 14),
+            "custom monitor order was not persisted",
+        )
+        page.deleteLater()
+        app.processEvents()
+
+
 def test_main_window_offscreen_logging():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -817,6 +855,19 @@ def test_main_window_offscreen_logging():
             window.tabWidget.setCurrentIndex(window.CLUSTER_TAB_INDEX)
             for _ in range(2):
                 app.processEvents()
+            _assert(window.cluster_view_tabs.count() == 3, "cluster page should expose three data views")
+            window.cluster_view_tabs.setCurrentIndex(0)
+            app.processEvents()
+            _assert(
+                window.cluster_section_splitters[window.CLUSTER_TAB_INDEX].isVisible(),
+                "legacy cluster data tables should remain visible",
+            )
+            _assert(
+                all(table.rowCount() >= 100 for table in window.TW[window.CLUSTER_TAB_INDEX]),
+                "legacy cluster data rows were removed",
+            )
+            window.cluster_view_tabs.setCurrentIndex(1)
+            app.processEvents()
             cluster_groups = [group for group in window.S33.groups if group.isVisible()]
             _assert(all(group.width() > 0 for group in cluster_groups), "cluster overview section collapsed")
             for left_index, left_group in enumerate(cluster_groups):
@@ -825,6 +876,12 @@ def test_main_window_offscreen_logging():
                         not left_group.geometry().intersects(right_group.geometry()),
                         f"cluster overview sections overlap at {width}x{height}",
                     )
+            window.cluster_view_tabs.setCurrentIndex(2)
+            app.processEvents()
+            _assert(
+                window.cluster_custom_page.table.isVisible(),
+                "custom indexed monitor should be visible",
+            )
 
             window.tabWidget.setCurrentIndex(window._realtime_monitor_tab_index())
             for _ in range(3):
@@ -905,10 +962,24 @@ def test_main_window_offscreen_logging():
                 window.cluster_overview_snapshots[1]["soc"] == 86.4,
                 "cluster overview should merge indexed foreground data into its broadcast cache",
             )
+            shared_ids = set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS)
+            queue_ids = set(window.cluster_page_signal_ids)
             _assert(
-                set(window.cluster_page_signal_ids)
-                == set(main_module.CLUSTER_OVERVIEW_INDEX_IDS) - set(main_module.SYSTEM_KLINE_SHARED_SIGNAL_IDS),
-                "cluster page should use the bounded 703 key-index queue",
+                set(window.BCUSignalQ) - shared_ids <= queue_ids,
+                "cluster page should retain the legacy full-data index queue",
+            )
+            _assert(
+                set(main_module.CLUSTER_OVERVIEW_INDEX_IDS) - shared_ids <= queue_ids,
+                "cluster page should retain the 703 overview indexes",
+            )
+            _assert(
+                set(window.cluster_custom_page.request_indexes()) - shared_ids <= queue_ids,
+                "cluster page should include enabled custom indexes",
+            )
+            window._handle_index_var_response(1, main_module.VAR_SYS_SOC, 777, True)
+            _assert(
+                window.cluster_custom_raw_words[1][main_module.VAR_SYS_SOC] == 777,
+                "custom indexed data should be cached per cluster",
             )
         finally:
             window._set_has_neutral(original_cluster_has_n, persist=False, refresh=True)
@@ -1420,6 +1491,7 @@ def main():
         test_power_diagnostics,
         test_alarm_parameter_transfer,
         test_cluster_overview_decoder,
+        test_cluster_custom_monitor,
         test_main_window_offscreen_logging,
     ]
     failures = []

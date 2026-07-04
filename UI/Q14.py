@@ -37,6 +37,7 @@ from .T37 import CellVisualizationPage as UI37
 from .T38 import SystemKLinePage as UI38
 from .T39 import PowerDiagnosticPage as UI39
 from .T40 import ClusterOverviewPage as UI40
+from .T41 import ClusterCustomMonitorPage as UI41
 from .conf import config
 from .responsive import FlowLayout
 
@@ -226,6 +227,7 @@ class Ui_Form(object):
         self.S31 = UI38()
         self.S32 = UI39()
         self.S33 = UI40()
+        self.cluster_custom_page = UI41()
 
         layout = QVBoxLayout(self.tab[CU_NUM+4])
         layout.addWidget(self.S28)
@@ -336,8 +338,32 @@ class Ui_Form(object):
             self.cluster_section_groups.append(section_groups)
             self.cluster_section_splitters.append(splitter)
 
-        self.cluster_section_splitters[1].hide()
-        self.tab[1].layout().addWidget(self.S33)
+        cluster_layout = self.tab[1].layout()
+        cluster_splitter = self.cluster_section_splitters[1]
+        cluster_layout.removeWidget(cluster_splitter)
+        self.cluster_view_tabs = QtWidgets.QTabWidget(self.tab[1])
+        self.cluster_view_tabs.setObjectName("clusterViewTabs")
+
+        self.cluster_data_page = QtWidgets.QWidget(self.cluster_view_tabs)
+        data_layout = QVBoxLayout(self.cluster_data_page)
+        data_layout.setContentsMargins(0, 0, 0, 0)
+        cluster_splitter.setParent(self.cluster_data_page)
+        data_layout.addWidget(cluster_splitter)
+
+        self.cluster_overview_page = QtWidgets.QWidget(self.cluster_view_tabs)
+        overview_layout = QVBoxLayout(self.cluster_overview_page)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        overview_layout.addWidget(self.S33)
+
+        self.cluster_custom_container = QtWidgets.QWidget(self.cluster_view_tabs)
+        custom_layout = QVBoxLayout(self.cluster_custom_container)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.addWidget(self.cluster_custom_page)
+
+        self.cluster_view_tabs.addTab(self.cluster_data_page, "全部数据")
+        self.cluster_view_tabs.addTab(self.cluster_overview_page, "703概览")
+        self.cluster_view_tabs.addTab(self.cluster_custom_container, "自定义监控")
+        cluster_layout.addWidget(self.cluster_view_tabs)
         self.apply_neutral_mode_labels(config.get("Has_N", 0) == 1)
 
         for i in range(0,CU_NUM+14):

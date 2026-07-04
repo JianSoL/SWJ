@@ -972,9 +972,20 @@ class Edit(Ui_Form, QWidget):
             if int(cluster_index) > 0
         }
         self.cluster_overview_last_render_monotonic = 0.0
+        self.cluster_custom_raw_words = {
+            int(cluster_index): {}
+            for cluster_index, _address in getattr(self, "cluster_options", [])
+            if int(cluster_index) > 0
+        }
         page = getattr(self, "S33", None)
         if page is not None:
             page.set_has_neutral(bool(config.get("Has_N", 0)))
+        custom_page = getattr(self, "cluster_custom_page", None)
+        if custom_page is not None:
+            custom_page.set_cluster_context(
+                self._active_cluster_index(),
+                getattr(self, "selected_cluster_address", ""),
+            )
 
 
     def _cluster_overview_cache(self, cluster_index):
@@ -1042,6 +1053,64 @@ class Edit(Ui_Form, QWidget):
         self._cache_cluster_overview_updates(cluster_index, updates, "索引")
 
 
+    def _refresh_cluster_custom_page(self):
+        page = getattr(self, "cluster_custom_page", None)
+        if page is None:
+            return
+        cluster_index = self._active_cluster_index()
+        page.set_cluster_context(cluster_index, getattr(self, "selected_cluster_address", ""))
+        if cluster_index <= 0:
+            page.clear_values()
+            return
+        store = getattr(self, "cluster_custom_raw_words", {})
+        page.set_snapshot(store.get(cluster_index, {}))
+
+
+    def _cache_cluster_custom_index_value(self, cluster_index, data_id, raw_word):
+        try:
+            cluster_index = int(cluster_index)
+            data_id = int(data_id)
+            raw_word = int(raw_word) & 0xFFFF
+        except (TypeError, ValueError):
+            return
+        if cluster_index <= 0:
+            return
+        store = getattr(self, "cluster_custom_raw_words", None)
+        if store is None:
+            store = {}
+            self.cluster_custom_raw_words = store
+        store.setdefault(cluster_index, {})[data_id] = raw_word
+        if cluster_index == self._active_cluster_index():
+            page = getattr(self, "cluster_custom_page", None)
+            if page is not None:
+                page.update_raw_value(data_id, raw_word)
+
+
+    def _rebuild_cluster_page_signal_ids(self, custom_ids=None):
+        page = getattr(self, "cluster_custom_page", None)
+        if custom_ids is None and page is not None:
+            custom_ids = page.request_indexes()
+        custom_ids = tuple(int(data_id) for data_id in (custom_ids or ()))
+        legacy_ids = tuple(int(data_id) for data_id in getattr(self, "BCUSignalQ", ()))
+        self.cluster_page_signal_ids = tuple(
+            data_id
+            for data_id in dict.fromkeys(
+                legacy_ids + tuple(CLUSTER_OVERVIEW_INDEX_IDS) + custom_ids
+            )
+            if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
+        )
+        if self.cluster_page_signal_ids:
+            self.BCUSignalQ_index = int(getattr(self, "BCUSignalQ_index", 0)) % len(
+                self.cluster_page_signal_ids
+            )
+        else:
+            self.BCUSignalQ_index = 0
+
+
+    def on_cluster_custom_configuration_changed(self, custom_ids):
+        self._rebuild_cluster_page_signal_ids(custom_ids)
+
+
     def _refresh_cluster_views(self, source=None):
         self._clear_cluster_buffers()
         self._clear_current_cluster_tables()
@@ -1067,6 +1136,7 @@ class Edit(Ui_Form, QWidget):
                 self.S32.set_cluster_context(0, "00")
                 self.S32.set_status_text("当前选择 00（未编制），不会请求上下电诊断数据。")
             self._refresh_cluster_overview_page()
+            self._refresh_cluster_custom_page()
             return
         self.S18currentIndexChanged()
         self.S18currentIndexChangedBAL()
@@ -1089,6 +1159,7 @@ class Edit(Ui_Form, QWidget):
         if getattr(self, "table_index", None) == self._control_tab_index() and getattr(self, "can_ready", False):
             self._refresh_host_control_snapshot(show_status=True)
         self._refresh_cluster_overview_page()
+        self._refresh_cluster_custom_page()
 
 
     def _refresh_cell_visualization_page(self):
@@ -1139,6 +1210,10 @@ class Edit(Ui_Form, QWidget):
                 self.S31.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S33"):
                 self.S33.set_cluster_context(cluster_index, self.selected_cluster_address)
+            if hasattr(self, "cluster_custom_page"):
+                self.cluster_custom_page.set_cluster_context(
+                    cluster_index, self.selected_cluster_address
+                )
             if hasattr(self, "S25"):
                 self.S25.set_cluster_context(cluster_index, self.selected_cluster_address)
             if hasattr(self, "S26"):
@@ -1714,6 +1789,7 @@ class Edit(Ui_Form, QWidget):
     def _handle_index_var_response(self, cluster_index, data_id, raw_word, success=True):
         if not success:
             return
+        self._cache_cluster_custom_index_value(cluster_index, data_id, raw_word)
         self._cache_realtime_monitor_index_value(cluster_index, data_id, raw_word)
         self._cache_runtime_record_index_value(cluster_index, data_id, raw_word)
         self._cache_system_kline_index_value(cluster_index, data_id, raw_word)
@@ -3304,6 +3380,9 @@ class Edit(Ui_Form, QWidget):
         self.S28.interval_spinbox.valueChanged.connect(self.on_active_alarm_interval_changed)
         self.S32.refreshRequested.connect(self.on_power_diagnostic_refresh)
         self.S32.refreshIntervalChanged.connect(self.on_power_diagnostic_interval_changed)
+        self.cluster_custom_page.configurationChanged.connect(
+            self.on_cluster_custom_configuration_changed
+        )
        # self.S21.button.clicked.connect(self.AlarmDatafh)
 
 
@@ -3407,12 +3486,8 @@ class Edit(Ui_Form, QWidget):
 
 
         self.BCUSignalQ = BCUSignalQ
-        self.cluster_page_signal_ids = tuple(
-            data_id
-            for data_id in CLUSTER_OVERVIEW_INDEX_IDS
-            if data_id not in SYSTEM_KLINE_SHARED_SIGNAL_IDS
-        )
         self.BCUSignalQ_index = 0
+        self._rebuild_cluster_page_signal_ids()
 
         self.BAUSignalQ = BAUSignalQ
         self.BAUSignalQ_index = 0
@@ -3496,6 +3571,7 @@ class Edit(Ui_Form, QWidget):
         self._refresh_visible_cell_data_page(index)
         if index == self.CLUSTER_TAB_INDEX:
             self._refresh_cluster_overview_page()
+            self._refresh_cluster_custom_page()
         if index != self.CLUSTER_TAB_INDEX:
             self._sync_page_cluster_combo_boxes(self._active_cluster_index())
             if index == self._active_alarm_tab_index():
