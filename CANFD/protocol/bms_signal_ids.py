@@ -1,0 +1,28 @@
+"""Named lower-controller protocol indexes used outside the legacy adapter."""
+
+from enum import IntEnum
+
+
+class BmsSignalId(IntEnum):
+    SYSTEM_VOLTAGE = 0x00D
+    SYSTEM_CURRENT = 0x00E
+    SYSTEM_RUN_STATUS = 0x00C
+    SYSTEM_SOC = 0x010
+    VOLTAGE_DIFFERENCE = 0x141
+    TEMPERATURE_DIFFERENCE = 0x142
+    MAXIMUM_CELL_VOLTAGE = 0x148
+    MINIMUM_CELL_VOLTAGE = 0x14B
+    MAXIMUM_CELL_TEMPERATURE = 0x14E
+
+
+DASHBOARD_POLL_SEQUENCE = (
+    BmsSignalId.SYSTEM_RUN_STATUS,
+    BmsSignalId.SYSTEM_SOC,
+    BmsSignalId.SYSTEM_VOLTAGE,
+    BmsSignalId.SYSTEM_CURRENT,
+    BmsSignalId.VOLTAGE_DIFFERENCE,
+    BmsSignalId.MAXIMUM_CELL_VOLTAGE,
+    BmsSignalId.MINIMUM_CELL_VOLTAGE,
+    BmsSignalId.MAXIMUM_CELL_TEMPERATURE,
+    BmsSignalId.TEMPERATURE_DIFFERENCE,
+)

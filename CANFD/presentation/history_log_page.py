@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from presentation.cluster_display import format_cluster_context
+
 
 HISTORY_LOG_COLUMNS = (
     ("序号", "sequence"),
@@ -190,7 +192,7 @@ class HistoryLogPage(QWidget):
         if cluster_index is None:
             text = "当前簇: -"
         else:
-            text = f"当前簇: 簇{cluster_index} / 地址 {address}"
+            text = format_cluster_context(cluster_index, address)
         self.cluster_label.setText(text)
 
     def selected_log_type(self):

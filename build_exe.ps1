@@ -1,5 +1,6 @@
 param(
-    [string]$PythonExe = "C:\Users\ch\.conda\envs\QT\python.exe"
+    [string]$PythonExe = "C:\Users\ch\.conda\envs\QT\python.exe",
+    [switch]$SkipChecks
 )
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -10,6 +11,14 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 Write-Host "Using Python: $PythonExe"
+
+if (-not $SkipChecks) {
+    & powershell -ExecutionPolicy Bypass -File ".\scripts\release_check.ps1" -PythonExe $PythonExe
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 & $PythonExe -m PyInstaller --noconfirm --clean DCBMS.spec
 
 if ($LASTEXITCODE -ne 0) {

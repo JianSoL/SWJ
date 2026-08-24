@@ -1,10 +1,13 @@
 import csv
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
 
 MAX_ROWS_PER_FILE = 100000
+DEFAULT_FLUSH_INTERVAL_MS = 250
+DEFAULT_FLUSH_ROW_COUNT = 128
 
 
 def _timestamp():
@@ -12,7 +15,7 @@ def _timestamp():
 
 
 def _payload_hex(data):
-    return " ".join(f"{byte:02X}" for byte in data)
+    return bytes(data).hex(" ").upper()
 
 
 def _format_snapshot_value(value):
@@ -32,13 +35,34 @@ def _normalize_snapshot_values(values, expected_count):
     return normalized_values
 
 
+def _safe_path_segment(value, fallback):
+    text = str(value).strip()
+    if not text:
+        text = str(fallback)
+    return "".join(
+        char if char.isalnum() or char in ("-", "_", ".") else "_"
+        for char in text
+    )
+
+
 class _RollingCsvWriter:
-    def __init__(self, path, header, max_rows):
+    def __init__(
+        self,
+        path,
+        header,
+        max_rows,
+        flush_interval_ms=DEFAULT_FLUSH_INTERVAL_MS,
+        flush_row_count=DEFAULT_FLUSH_ROW_COUNT,
+    ):
         self.base_path = Path(path)
         self.header = list(header)
         self.max_rows = max_rows
+        self.flush_interval_s = max(int(flush_interval_ms), 1) / 1000.0
+        self.flush_row_count = max(int(flush_row_count), 1)
         self.part_index = 1
         self.row_count = 0
+        self._pending_flush_rows = 0
+        self._last_flush_at = time.monotonic()
         self._file_handle = None
         self._writer = None
         self._initialize_file()
@@ -50,11 +74,24 @@ class _RollingCsvWriter:
             self._initialize_file()
 
         self._writer.writerow(row)
-        self._file_handle.flush()
         self.row_count += 1
+        self._pending_flush_rows += 1
+        if (
+            self._pending_flush_rows >= self.flush_row_count
+            or time.monotonic() - self._last_flush_at >= self.flush_interval_s
+        ):
+            self.flush()
+
+    def flush(self):
+        if self._file_handle is None or self._pending_flush_rows <= 0:
+            return
+        self._file_handle.flush()
+        self._pending_flush_rows = 0
+        self._last_flush_at = time.monotonic()
 
     def close(self):
         if self._file_handle is not None:
+            self.flush()
             self._file_handle.close()
             self._file_handle = None
             self._writer = None
@@ -69,10 +106,19 @@ class _RollingCsvWriter:
 
     def _initialize_file(self):
         self.close()
-        self._file_handle = open(self.current_path, "w", newline="", encoding="utf-8")
+        self.current_path.parent.mkdir(parents=True, exist_ok=True)
+        self._file_handle = open(
+            self.current_path,
+            "w",
+            newline="",
+            encoding="utf-8",
+            buffering=1024 * 1024,
+        )
         self._writer = csv.writer(self._file_handle)
         self._writer.writerow(self.header)
         self._file_handle.flush()
+        self._pending_flush_rows = 0
+        self._last_flush_at = time.monotonic()
 
 
 class SessionLogManager:
@@ -88,13 +134,18 @@ class SessionLogManager:
         temperature_count=0,
         balance_module_count=0,
         balance_cells_per_module=0,
+        balance_temperature_per_module=0,
         enabled=True,
         console_echo=False,
+        flush_interval_ms=DEFAULT_FLUSH_INTERVAL_MS,
+        flush_row_count=DEFAULT_FLUSH_ROW_COUNT,
     ):
         self.enabled = bool(enabled)
         self.console_echo = bool(console_echo)
         self.log_dir = Path(log_dir)
         self.max_rows_per_file = max_rows_per_file
+        self.flush_interval_ms = max(int(flush_interval_ms), 1)
+        self.flush_row_count = max(int(flush_row_count), 1)
         if cluster_indices is None:
             if cluster_count is None:
                 raise ValueError("cluster_count or cluster_indices is required")
@@ -102,22 +153,95 @@ class SessionLogManager:
         else:
             self.cluster_indices = list(cluster_indices)
         self.cluster_addresses = [str(address) for address in (cluster_addresses or [])]
-        self.legacy_signal_names = list(legacy_signal_names)
+        self.cluster_address_by_index = {
+            cluster_index: self.cluster_addresses[position]
+            for position, cluster_index in enumerate(self.cluster_indices)
+            if position < len(self.cluster_addresses)
+        }
+        self.cluster_index_by_address = {
+            address: cluster_index
+            for cluster_index, address in self.cluster_address_by_index.items()
+        }
+        self.legacy_signal_names = self._normalize_signal_names(
+            legacy_signal_names
+        )
         self.voltage_count = int(voltage_count)
         self.temperature_count = int(temperature_count)
         self.balance_module_count = int(balance_module_count)
         self.balance_cells_per_module = int(balance_cells_per_module)
+        self.balance_temperature_per_module = int(balance_temperature_per_module)
         self.tx_writer = None
         self.rx_writer = None
         self.dbc_writer = None
         self.cluster_writers = {}
         self.voltage_writers = {}
         self.temperature_writers = {}
+        self.balance_temperature_writers = {}
         self.balance_writers = {}
 
         self._prepare_session_paths()
         if self.enabled:
             self._start_session()
+
+    def update_layout(
+        self,
+        cluster_indices,
+        cluster_addresses,
+        legacy_signal_names=None,
+        voltage_count=0,
+        temperature_count=0,
+        balance_module_count=0,
+        balance_cells_per_module=0,
+        balance_temperature_per_module=0,
+    ):
+        was_enabled = self.enabled
+        self.close()
+        self.cluster_indices = list(cluster_indices)
+        self.cluster_addresses = [str(address) for address in cluster_addresses]
+        self.cluster_address_by_index = {
+            cluster_index: self.cluster_addresses[position]
+            for position, cluster_index in enumerate(self.cluster_indices)
+            if position < len(self.cluster_addresses)
+        }
+        self.cluster_index_by_address = {
+            address: cluster_index
+            for cluster_index, address in self.cluster_address_by_index.items()
+        }
+        if legacy_signal_names is not None:
+            self.legacy_signal_names = self._normalize_signal_names(
+                legacy_signal_names
+            )
+        self.voltage_count = int(voltage_count)
+        self.temperature_count = int(temperature_count)
+        self.balance_module_count = int(balance_module_count)
+        self.balance_cells_per_module = int(balance_cells_per_module)
+        self.balance_temperature_per_module = int(balance_temperature_per_module)
+        if was_enabled:
+            self._start_session()
+
+    @staticmethod
+    def _normalize_signal_names(signal_names):
+        return list(dict.fromkeys(str(name) for name in (signal_names or ())))
+
+    def update_legacy_signal_names(self, legacy_signal_names):
+        signal_names = self._normalize_signal_names(legacy_signal_names)
+        if signal_names == self.legacy_signal_names:
+            return False
+
+        for writer in self.cluster_writers.values():
+            writer.close()
+        self.cluster_writers = {}
+        self.legacy_signal_names = signal_names
+        self._prepare_cluster_snapshot_paths(
+            datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+        )
+        if self.enabled:
+            header = ["timestamp"] + self.legacy_signal_names
+            self.cluster_writers = {
+                cluster_index: self._create_writer(cluster_path, header)
+                for cluster_index, cluster_path in self.cluster_path_by_index.items()
+            }
+        return True
 
     def set_enabled(self, enabled):
         enabled = bool(enabled)
@@ -133,7 +257,7 @@ class SessionLogManager:
         self._start_session()
 
     def _initialize_files(self):
-        self.tx_writer = _RollingCsvWriter(
+        self.tx_writer = self._create_writer(
             self.tx_path,
             [
                 "timestamp",
@@ -146,10 +270,9 @@ class SessionLogManager:
                 "data_hex",
                 "tx_result",
             ],
-            self.max_rows_per_file,
         )
 
-        self.rx_writer = _RollingCsvWriter(
+        self.rx_writer = self._create_writer(
             self.rx_path,
             [
                 "timestamp",
@@ -161,10 +284,9 @@ class SessionLogManager:
                 "data_hex",
                 "extra",
             ],
-            self.max_rows_per_file,
         )
 
-        self.dbc_writer = _RollingCsvWriter(
+        self.dbc_writer = self._create_writer(
             self.dbc_path,
             [
                 "timestamp",
@@ -176,12 +298,11 @@ class SessionLogManager:
                 "signal_count",
                 "signals_json",
             ],
-            self.max_rows_per_file,
         )
 
         header = ["timestamp"] + self.legacy_signal_names
         self.cluster_writers = {
-            cluster_index: _RollingCsvWriter(cluster_path, header, self.max_rows_per_file)
+            cluster_index: self._create_writer(cluster_path, header)
             for cluster_index, cluster_path in self.cluster_path_by_index.items()
         }
 
@@ -191,7 +312,7 @@ class SessionLogManager:
                 for index in range(1, self.voltage_count + 1)
             ]
             self.voltage_writers = {
-                address: _RollingCsvWriter(path, voltage_header, self.max_rows_per_file)
+                address: self._create_writer(path, voltage_header)
                 for address, path in self.voltage_path_by_address.items()
             }
         else:
@@ -203,7 +324,7 @@ class SessionLogManager:
                 for index in range(1, self.temperature_count + 1)
             ]
             self.temperature_writers = {
-                address: _RollingCsvWriter(path, temperature_header, self.max_rows_per_file)
+                address: self._create_writer(path, temperature_header)
                 for address, path in self.temperature_path_by_address.items()
             }
         else:
@@ -220,34 +341,111 @@ class SessionLogManager:
                 for cell_index in range(self.balance_cells_per_module)
             ]
             self.balance_writers = {
-                address: _RollingCsvWriter(path, balance_header, self.max_rows_per_file)
+                address: self._create_writer(path, balance_header)
                 for address, path in self.balance_path_by_address.items()
             }
         else:
             self.balance_writers = {}
+
+        if (
+            self.cluster_addresses
+            and self.balance_module_count > 0
+            and self.balance_temperature_per_module > 0
+        ):
+            balance_temperature_header = ["timestamp"] + [
+                f"M{module_index + 1}-BT{temperature_index + 1:03d}"
+                for module_index in range(self.balance_module_count)
+                for temperature_index in range(self.balance_temperature_per_module)
+            ]
+            self.balance_temperature_writers = {
+                address: self._create_writer(
+                    path,
+                    balance_temperature_header,
+                )
+                for address, path in self.balance_temperature_path_by_address.items()
+            }
+        else:
+            self.balance_temperature_writers = {}
+
+    def _create_writer(self, path, header):
+        return _RollingCsvWriter(
+            path,
+            header,
+            self.max_rows_per_file,
+            flush_interval_ms=self.flush_interval_ms,
+            flush_row_count=self.flush_row_count,
+        )
 
     def _prepare_session_paths(self):
         self.session_name = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
         self.tx_path = self.log_dir / f"{self.session_name}_can_tx.csv"
         self.rx_path = self.log_dir / f"{self.session_name}_can_rx.csv"
         self.dbc_path = self.log_dir / f"{self.session_name}_dbc.csv"
-        self.cluster_paths = [
-            self.log_dir / f"{self.session_name}_cluster_{cluster_index}.csv"
+        self.cluster_dir_by_index = {
+            cluster_index: self._cluster_dir_for_index(cluster_index)
             for cluster_index in self.cluster_indices
-        ]
-        self.cluster_path_by_index = dict(zip(self.cluster_indices, self.cluster_paths))
+        }
+        self.cluster_dir_by_address = {
+            address: self._cluster_dir_for_address(address)
+            for address in self.cluster_addresses
+        }
+        self._prepare_cluster_snapshot_paths(self.session_name)
         self.voltage_path_by_address = {
-            address: self.log_dir / f"{self.session_name}_voltage_{address}.csv"
+            address: (
+                self.cluster_dir_by_address[address]
+                / "voltage"
+                / f"{self.session_name}_voltage_{address}.csv"
+            )
             for address in self.cluster_addresses
         }
         self.temperature_path_by_address = {
-            address: self.log_dir / f"{self.session_name}_temperature_{address}.csv"
+            address: (
+                self.cluster_dir_by_address[address]
+                / "temperature"
+                / f"{self.session_name}_temperature_{address}.csv"
+            )
             for address in self.cluster_addresses
         }
         self.balance_path_by_address = {
-            address: self.log_dir / f"{self.session_name}_balance_{address}.csv"
+            address: (
+                self.cluster_dir_by_address[address]
+                / "balance"
+                / f"{self.session_name}_balance_{address}.csv"
+            )
             for address in self.cluster_addresses
         }
+        self.balance_temperature_path_by_address = {
+            address: (
+                self.cluster_dir_by_address[address]
+                / "balance_temperature"
+                / f"{self.session_name}_balance_temperature_{address}.csv"
+            )
+            for address in self.cluster_addresses
+        }
+
+    def _prepare_cluster_snapshot_paths(self, session_name):
+        self.cluster_paths = [
+            self.cluster_dir_by_index[cluster_index]
+            / "legacy"
+            / f"{session_name}_cluster_{cluster_index}.csv"
+            for cluster_index in self.cluster_indices
+        ]
+        self.cluster_path_by_index = dict(zip(self.cluster_indices, self.cluster_paths))
+
+    def _cluster_dir_for_index(self, cluster_index):
+        address = self.cluster_address_by_index.get(cluster_index)
+        cluster_segment = _safe_path_segment(cluster_index, "unknown")
+        if address is None:
+            return self.log_dir / f"cluster_{cluster_segment}"
+        address_segment = _safe_path_segment(address, "unknown")
+        return self.log_dir / f"cluster_{cluster_segment}_{address_segment}"
+
+    def _cluster_dir_for_address(self, address):
+        cluster_index = self.cluster_index_by_address.get(str(address))
+        if cluster_index is not None:
+            return self.cluster_dir_by_index[cluster_index]
+        address_segment = _safe_path_segment(address, "unknown")
+        return self.log_dir / f"cluster_address_{address_segment}"
 
     def _start_session(self):
         self._prepare_session_paths()
@@ -356,6 +554,29 @@ class SessionLogManager:
         ]
         self.balance_writers[address].write_row(row)
 
+    def write_balance_temperature_snapshot(self, address, values):
+        if not self.enabled or address not in self.balance_temperature_writers:
+            return
+        row = [_timestamp()] + [
+            _format_snapshot_value(value)
+            for value in _normalize_snapshot_values(
+                values,
+                self.balance_module_count * self.balance_temperature_per_module,
+            )
+        ]
+        self.balance_temperature_writers[address].write_row(row)
+
+    def flush(self):
+        writers = [self.tx_writer, self.rx_writer, self.dbc_writer]
+        writers.extend(self.cluster_writers.values())
+        writers.extend(self.voltage_writers.values())
+        writers.extend(self.temperature_writers.values())
+        writers.extend(self.balance_temperature_writers.values())
+        writers.extend(self.balance_writers.values())
+        for writer in writers:
+            if writer is not None:
+                writer.flush()
+
     def close(self):
         if self.tx_writer is not None:
             self.tx_writer.close()
@@ -369,5 +590,15 @@ class SessionLogManager:
             writer.close()
         for writer in self.temperature_writers.values():
             writer.close()
+        for writer in self.balance_temperature_writers.values():
+            writer.close()
         for writer in self.balance_writers.values():
             writer.close()
+        self.tx_writer = None
+        self.rx_writer = None
+        self.dbc_writer = None
+        self.cluster_writers = {}
+        self.voltage_writers = {}
+        self.temperature_writers = {}
+        self.balance_temperature_writers = {}
+        self.balance_writers = {}

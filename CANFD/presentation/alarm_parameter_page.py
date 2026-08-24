@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from presentation.cluster_display import format_cluster_context
+
 from domain.models import AlarmParameterRecord
 
 
@@ -87,6 +89,8 @@ class AlarmParameterPage(QWidget):
         toolbar.addWidget(self.read_summary_button)
         self.write_current_button = QPushButton("写入选中告警", self)
         toolbar.addWidget(self.write_current_button)
+        self.restore_button = QPushButton("恢复BCU出厂默认参数", self)
+        toolbar.addWidget(self.restore_button)
         self.save_flash_button = QPushButton("保存参数到FLASH", self)
         toolbar.addWidget(self.save_flash_button)
         layout.addLayout(toolbar)
@@ -316,7 +320,7 @@ class AlarmParameterPage(QWidget):
         if cluster_index is None or not address:
             self.cluster_label.setText("当前簇: -")
             return
-        self.cluster_label.setText(f"当前簇: 簇{cluster_index} / 地址 {address}")
+        self.cluster_label.setText(format_cluster_context(cluster_index, address))
 
     def set_status_text(self, text):
         self.status_label.setText("" if text is None else str(text))

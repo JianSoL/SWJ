@@ -24,8 +24,9 @@ class BatteryMonitorBAL(ModuleValuePage):
                 if values_per_group is not None
                 else config.get("BALANCE_CELLS_PER_MODULE", config["CELL_NUM"])
             ),
-            items_per_row=5,
+            items_per_row=10,
             highlight_mode="binary",
+            group_columns=1,
         )
 
     def setSignalValues(self, items):

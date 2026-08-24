@@ -2,97 +2,863 @@ Test_4_10:
   Version: 1.01 SHOTO BMS
   SAVE_LOG: 1
   SAVE_INTERVAL_MS: 1000
+  RX_BATCH_SIZE: 256
+  RX_MAX_FRAMES_PER_POLL: 2048
+  RX_POLL_BUDGET_MS: 8
+  ACTIVE_POLL_INTERVAL_MS: 10
+  POLL_INTERVAL_MS: 40
+  QUERY_INTERVAL_MS: 20
+  BACKGROUND_QUERY_INTERVAL_MS: 80
+  ACTIVE_QUERY_BURST_SIZE: 2
+  UI_REFRESH_INTERVAL_MS: 50
+  COMMUNICATION_TILE_REFRESH_MS: 250
+  COMMUNICATION_ACTIVE_TIMEOUT_MS: 2000
+  LOG_FLUSH_INTERVAL_MS: 250
+  LOG_FLUSH_ROW_COUNT: 128
   DEVICE_INDEX: 0
   CHANNEL_INDEX: 0
   Has_N: 1
-  BCU_NUM: 2
-  LECU_NUM: 1
+  BCU_NUM: 12
+  LECU_NUM: 4
   CELL_NUM: 104
   CELL_Tem_NUM: 104
-  BAUaddr: "EF"
-  IPCaddr: "F2"
+  BALANCE_TEMP_PER_MODULE: 8
+  BAUaddr: EF
+  IPCaddr: F2
   ADDRESLIST:
-    - "00"
-    - "A0"
-    - "A1"
-    - "A2"
-    - "A3"
-    - "A4"
-    - "A5"
-    - "A6"
-    - "A7"
-    - "A8"
-    - "A9"
-    - "AA"
-    - "AB"
-    - "AC"
-    - "AD"
-    - "AE"
-    - "AF"
+  - A0
+  - A1
+  - A2
+  - A3
+  - A4
+  - A5
+  - A6
+  - A7
+  - A8
+  - A9
+  - AA
+  - AB
+  - AC
+  - AD
+  - AE
+  - AF
   ADDRESLIST0x:
-    - "0xA0"
-    - "0xA1"
-    - "0xA2"
-    - "0xA3"
-    - "0xA4"
-    - "0xA5"
-    - "0xA6"
-    - "0xA7"
-    - "0xA8"
-    - "0xA9"
-    - "0xAA"
-    - "0xAB"
-    - "0xAC"
-    - "0xAD"
-    - "0xAE"
-    - "0xAF"
-
+  - '0xA0'
+  - '0xA1'
+  - '0xA2'
+  - '0xA3'
+  - '0xA4'
+  - '0xA5'
+  - '0xA6'
+  - '0xA7'
+  - '0xA8'
+  - '0xA9'
+  - '0xAA'
+  - '0xAB'
+  - '0xAC'
+  - '0xAD'
+  - '0xAE'
+  - '0xAF'
   Glaoal_Index_alarm: 608512
-
   Alarm_name_key:
-    "001": "单体电压过高"
-    "002": "单体电压过低"
-    "003": "总电压过高"
-    "004": "总电压过低"
-    "005": "模组过压"
-    "006": "模组欠压"
-    "007": "电池簇充电电池单体电压极差"
-    "008": "电池簇放电电池单体电压极差"
-    "009": "单体压差过大"
-    "010": "模组压差过大"
-    "011": "充电过流"
-    "012": "放电过流"
-    "013": "电池单体高温"
-    "014": "电池单体低温"
-    "015": "充电温度过高"
-    "016": "充电温度过低"
-    "017": "放电温度过高"
-    "018": "放电温度过低"
-    "019": "电池簇充电电池单体温度极差"
-    "020": "电池簇放电电池单体温度极差"
-    "021": "绝缘低"
-    "022": "绝缘检测故障"
-    "023": "高压箱内连接器温度高"
-    "024": "电池组SOC过低"
-    "025": "极柱过温"
-    "026": "温升过高"
-    "027": "BAU通信故障"
-    "028": "BMU通讯故障"
-    "029": "BMU概要故障"
-    "030": "接触器粘连故障"
-    "031": "BCU概要故障"
-    "032": "熔断器故障"
-    "033": "电流传感器故障"
-    "034": "断路器断开（隔离空开）"
-    "035": "NTC故障"
-    "036": "极柱温度传感器故障"
-    "037": "高压箱温度传感器故障"
-    "038": "单体温度传感器故障"
-    "039": "单体电压故障"
-    "040": "BCU功能安全告警"
-    "041": "BMU自检故障"
-    "042": "BCU自检故障"
-    "043": "充放电回路异常"
-    "044": "簇总压校验差过大"
-    "045": "预充故障"
-    "046": "断路器故障"
+    '001': 单体电压过高
+    '002': 单体电压过低
+    '003': 总电压过高
+    '004': 总电压过低
+    '005': 模组过压
+    '006': 模组欠压
+    '007': 电池簇充电电池单体电压极差
+    008: 电池簇放电电池单体电压极差
+    009: 单体压差过大
+    '010': 模组压差过大
+    '011': 充电过流
+    '012': 放电过流
+    '013': 电池单体高温
+    '014': 电池单体低温
+    '015': 充电温度过高
+    '016': 充电温度过低
+    '017': 放电温度过高
+    018: 放电温度过低
+    019: 电池簇充电电池单体温度极差
+    '020': 电池簇放电电池单体温度极差
+    '021': 绝缘低
+    '022': 绝缘检测故障
+    '023': 高压箱内连接器温度高
+    '024': 电池组SOC过低
+    '025': 极柱过温
+    '026': 温升过高
+    '027': BAU通信故障
+    028: BMU通讯故障
+    029: BMU概要故障
+    '030': 接触器粘连故障
+    '031': BCU概要故障
+    '032': 熔断器故障
+    '033': 电流传感器故障
+    '034': 断路器断开（隔离空开）
+    '035': NTC故障
+    '036': 极柱温度传感器故障
+    '037': 高压箱温度传感器故障
+    038: 单体温度传感器故障
+    039: 单体电压故障
+    '040': BCU功能安全告警
+    '041': BMU自检故障
+    '042': BCU自检故障
+    '043': 充放电回路异常
+    '044': 簇总压校验差过大
+    '045': 预充故障
+    '046': 断路器故障
+    '047': 电池簇充电电池模块电压极差
+    048: 电池簇放电电池模块电压极差
+    049: 高压箱风扇故障
+  BALANCE_CELLS_PER_MODULE: 104
+  REQUEST_GROUPS:
+  - - index: 14
+      name: 系统电流[0.1A]
+      unit: 0.1A
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 789
+      name: 霍尔电流[0.1A]
+      unit: 0.1A
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 790
+      name: 分流器电流[0.1A]
+      unit: 0.1A
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 91
+      name: B端电压[0.1V]
+      unit: 0.1V
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 13
+      name: 累计总压
+      unit: 0.1V
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 92
+      name: P端电压[0.1V]
+      unit: 0.1V
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 328
+      name: 最大单体电压[mV]
+      unit: mV
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 329
+      name: 最大单体电压模组位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 8
+      bit_length: 16
+    - index: 329
+      name: 最大单体电压模组内位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 0
+      bit_length: 8
+    - index: 331
+      name: 最小单体电压[mV]
+      unit: mV
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 332
+      name: 最小单体电压模组位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 8
+      bit_length: 16
+    - index: 332
+      name: 最小单体电压模组内位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 0
+      bit_length: 8
+    - index: 321
+      name: 系统压差[mV]
+      unit: mV
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 334
+      name: 最大单体温度[0.1℃]
+      unit: 0.1℃
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 335
+      name: 最大单体温度模组位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 8
+      bit_length: 16
+    - index: 335
+      name: 最大单体温度模组内位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 0
+      bit_length: 8
+    - index: 337
+      name: 最小单体温度[0.1℃]
+      unit: 0.1℃
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 338
+      name: 最小单体温度模组位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 8
+      bit_length: 16
+    - index: 338
+      name: 最小单体温度模组内位置
+      unit: NAN(1开始)
+      signed: false
+      bit_start: 0
+      bit_length: 8
+    - index: 322
+      name: 系统温差[0.1℃]
+      unit: 0.1℃
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 0
+      name: 充电继电器回采状态[待适配]
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 0
+      name: 放电继电器回采状态[待适配]
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 276
+      name: 最严重告警等级
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 8
+    - index: 276
+      name: 告警放电继电器关联
+      unit: NAN
+      signed: false
+      bit_start: 8
+      bit_length: 2
+    - index: 276
+      name: 告警停机关联
+      unit: NAN
+      signed: false
+      bit_start: 10
+      bit_length: 2
+    - index: 276
+      name: 告充电继电器关联
+      unit: NAN
+      signed: false
+      bit_start: 12
+      bit_length: 2
+    - index: 536578
+      name: BAU控制命令
+      unit: 0-默认 1-上电 2-下电 3-休眠
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 12
+      name: 系统运行状态
+      unit: 0-初始、1-自测、2、准备、3、预充、4-高压待机、5-放电、6-充电，7-放空、8-充满、9-错误、10-切断、11-休眠
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 450
+      name: PURE_SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 451
+      name: REVISE_SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 452
+      name: REVISE_SOC_TEMP
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 448
+      name: CELL_MAX_SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 449
+      name: CELL_MIN_SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 454
+      name: CELL_MAX_SOC_TEMP
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 453
+      name: CELL_MIN_SOC_TEMP
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 455
+      name: FUZZY_SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 16
+      name: 系统SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 18
+      name: 显示SOC
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591873
+      name: 电池充电AH数[0.01AH]
+      unit: 一个循环清零
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591874
+      name: 电池放电AH数[0.01AH]
+      unit: 一个循环清零
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591875
+      name: 累计充电次数
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591876
+      name: 累计放电次数
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 511
+      name: 剩余充电时间[S]
+      unit: S
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 512
+      name: 剩余放电时间[S]
+      unit: S
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591948
+      name: 实际可用容量
+      unit: 0.01AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590941
+      name: 额定容量
+      unit: 0.1AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 17
+      name: 系统SOH
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 438
+      name: 显示SOH
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591990
+      name: 温度修正后容量高字节
+      unit: 0.01AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591991
+      name: 温度修正后容量高低字节
+      unit: 0.01AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591992
+      name: 温度修正后寿命高字节
+      unit: 0.1MIN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 591993
+      name: 温度修正后寿命低字节
+      unit: 0.1MIN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 21
+      name: 系统SOE
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 31
+      name: 显示SOE
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 594
+      name: 剩余可放电[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 595
+      name: 剩余可充电[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 509
+      name: 单次充电电量[0.1KWH]
+      unit: 0.1KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 510
+      name: 单次放电电量[0.1KWH]
+      unit: 0.1KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592006
+      name: 累计充电电量高字节[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592005
+      name: 累计充电电量低字节[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592008
+      name: 累计放电电量高字节[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592007
+      name: 累计放电电量低字节[0.01KWH]
+      unit: 0.01KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 422
+      name: 2S最大允许放电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 426
+      name: 10S最大允许放电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 430
+      name: 60S最大允许放电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 421
+      name: 2S最大允许放电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 425
+      name: 10S最大允许放电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 429
+      name: 60S最大允许放电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 424
+      name: 2S最大允许充电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 428
+      name: 10S最大允许充电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 432
+      name: 60S最大允许充电功率[10W]
+      unit: 10W
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 423
+      name: 2S最大允许充电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 427
+      name: 10S最大允许充电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 431
+      name: 60S最大允许充电电流[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 446
+      name: 最大单体电压对应OCV查表[0.1%]
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 447
+      name: 最小单体电压对应OCV查表[0.1%]
+      unit: 0.1%
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 458
+      name: OCV更新次数
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 459
+      name: OCV无法更新原因
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 529
+      name: SOC定期下降标志位
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 456
+      name: 满充满放标志位
+      unit: 0-默认；1-满充；2-满放
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 457
+      name: 满充标志位
+      unit: 0-未满充；1满充
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 404
+      name: BMU编制标志位
+      unit: 0-未完成，1-编制成功，2-编制失败，3-编制通过还未收到报文，4-报文以收到，单总压不正确
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592009
+      name: 日累计电量记录时间
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592010
+      name: 日累计充电电量
+      unit: 0.1KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592011
+      name: 日累计放电电量
+      unit: 0.1KWH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592012
+      name: 日累计充电容量
+      unit: 0.1AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 592013
+      name: 日累计放电容量
+      unit: 0.1AH
+      signed: false
+      bit_start: 0
+      bit_length: 16
+  - - index: 590849
+      name: 系统模组个数
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590850
+      name: 每个模组AFE数
+      unit: NAN
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590918
+      name: 均衡启动压差[mV]
+      unit: mv
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590919
+      name: 均衡停止压差[mV]
+      unit: mv
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590922
+      name: 均衡启动电压[mV]
+      unit: mv
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590923
+      name: 均衡保护电压上限[mV]
+      unit: mv
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590924
+      name: 均衡保护电压下限[mV]
+      unit: mv
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590925
+      name: 均衡保护温度上限[mV]
+      unit: mv
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 590926
+      name: 均衡保护温度下限[mV]
+      unit: mv
+      signed: true
+      bit_start: 0
+      bit_length: 16
+    - index: 590969
+      name: 最大允许预充时间[0.1S]
+      unit: 0.1S
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590970
+      name: 预充电压完成百分比/压差[%/0.1V]
+      unit: '%/0.1V'
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590971
+      name: 并机均充开启与结束电压百分比/压差[%/0.1V]
+      unit: '%/0.1V'
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590972
+      name: 最小预充时间[0.1S]
+      unit: 0.1S
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 590973
+      name: 预充电流限制[0.1A]
+      unit: 0.1A
+      signed: false
+      bit_start: 0
+      bit_length: 16
+  - - index: 800
+      name: '800'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 801
+      name: '801'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 802
+      name: '802'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 803
+      name: '803'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 804
+      name: '804'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 805
+      name: '805'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 806
+      name: '806'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 807
+      name: '807'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 808
+      name: '808'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 809
+      name: '809'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 810
+      name: '810'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 811
+      name: '811'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 812
+      name: '812'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 813
+      name: '813'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 814
+      name: '814'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 815
+      name: '815'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 816
+      name: '816'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 817
+      name: '817'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 818
+      name: '818'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 819
+      name: '819'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 820
+      name: '820'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 821
+      name: '821'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 822
+      name: '822'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16
+    - index: 823
+      name: '823'
+      unit: ''
+      signed: false
+      bit_start: 0
+      bit_length: 16

@@ -75,6 +75,10 @@ class PollResult:
     periodic_status: Dict[str, str] = field(default_factory=dict)
     balance_updates: List[str] = field(default_factory=list)
     had_rx_frame: bool = False
+    received_frame_count: int = 0
+    handled_frame_count: int = 0
+    update_count_before_coalesce: int = 0
+    poll_elapsed_ms: float = 0.0
 
 
 @dataclass(frozen=True)

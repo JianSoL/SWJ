@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -24,6 +25,8 @@ class FakeDriver:
         self.closed = False
         self.open_calls = 0
         self.close_calls = 0
+        self.receive_can_args = []
+        self.receive_canfd_args = []
 
     def open(self, config):
         self.open_calls += 1
@@ -44,11 +47,13 @@ class FakeDriver:
         return 1
 
     def receive_can(self, max_count=200, timeout_ms=None):
+        self.receive_can_args.append((max_count, timeout_ms))
         frames = self.can_frames[:max_count]
         self.can_frames = self.can_frames[max_count:]
         return frames
 
     def receive_canfd(self, max_count=200, timeout_ms=None):
+        self.receive_canfd_args.append((max_count, timeout_ms))
         frames = self.canfd_frames[:max_count]
         self.canfd_frames = self.canfd_frames[max_count:]
         return frames
@@ -62,7 +67,9 @@ class NullLogManager:
         self.cluster_rows = []
         self.voltage_rows = []
         self.temperature_rows = []
+        self.balance_temperature_rows = []
         self.balance_rows = []
+        self.layout_updates = []
 
     def log_tx(self, frame_kind, target_index, frame, result):
         self.tx_rows.append((frame_kind, target_index, frame.frame_id, result))
@@ -82,8 +89,42 @@ class NullLogManager:
     def write_temperature_snapshot(self, address, values):
         self.temperature_rows.append((address, list(values)))
 
+    def write_balance_temperature_snapshot(self, address, values):
+        self.balance_temperature_rows.append((address, list(values)))
+
     def write_balance_snapshot(self, address, values):
         self.balance_rows.append((address, list(values)))
+
+    def update_layout(
+        self,
+        cluster_indices,
+        cluster_addresses,
+        legacy_signal_names=None,
+        voltage_count=0,
+        temperature_count=0,
+        balance_module_count=0,
+        balance_cells_per_module=0,
+        balance_temperature_per_module=0,
+    ):
+        self.layout_updates.append(
+            {
+                "cluster_indices": list(cluster_indices),
+                "cluster_addresses": list(cluster_addresses),
+                "legacy_signal_names": (
+                    None
+                    if legacy_signal_names is None
+                    else list(legacy_signal_names)
+                ),
+                "voltage_count": voltage_count,
+                "temperature_count": temperature_count,
+                "balance_module_count": balance_module_count,
+                "balance_cells_per_module": balance_cells_per_module,
+                "balance_temperature_per_module": balance_temperature_per_module,
+            }
+        )
+
+    def update_legacy_signal_names(self, legacy_signal_names):
+        self.legacy_signal_names = list(legacy_signal_names)
 
 
 def build_legacy_catalog():
@@ -246,6 +287,24 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(frame.frame_id, 0x1880A0F2)
         self.assertEqual(frame.data[:4], bytes.fromhex("78563412"))
 
+    def test_request_and_balance_queries_use_configured_addresses_without_cluster_zero(self):
+        driver = FakeDriver()
+        service = CanApplicationService(
+            runtime_config={"BCU_NUM": 2, "ADDRESLIST": ["A0", "A1"]},
+            bus_config=self.bus_config,
+            driver=driver,
+            legacy_catalog=build_legacy_catalog(),
+            dbc_runtime=self.dbc_runtime,
+            log_manager=NullLogManager(),
+        )
+        service.open()
+
+        service.send_next_query(0)
+        service.send_next_balance_query(1)
+
+        self.assertEqual(driver.sent_can[0].frame_id, 0x1880A0F2)
+        self.assertEqual(driver.sent_can[1].frame_id, 0x1880A1F2)
+
     def test_send_next_query_maintains_independent_cursor_per_cluster(self):
         catalog = LegacySignalCatalog(
             [
@@ -293,6 +352,95 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(self.driver.sent_can[2].data[:4], bytes.fromhex("22222222"))
         self.assertEqual(self.driver.sent_can[3].data[:4], bytes.fromhex("22222222"))
 
+    def test_custom_request_groups_drive_query_and_decode(self):
+        driver = FakeDriver()
+        logger = NullLogManager()
+        runtime_config = dict(self.runtime_config)
+        runtime_config["REQUEST_GROUPS"] = [
+            [
+                {
+                    "index": "0x315",
+                    "name": "Hall current",
+                    "unit": "0.1A",
+                    "signed": True,
+                }
+            ],
+            [
+                {
+                    "index": 0x90401,
+                    "name": "LECU count",
+                    "unit": "",
+                    "signed": False,
+                }
+            ],
+        ]
+        service = CanApplicationService(
+            runtime_config=runtime_config,
+            bus_config=self.bus_config,
+            driver=driver,
+            legacy_catalog=build_legacy_catalog(),
+            dbc_runtime=self.dbc_runtime,
+            log_manager=logger,
+        )
+        service.open()
+
+        service.send_next_query(1)
+        driver.can_frames.append(self._read_var_response(0x1881F2A0, 0x315, 0xFFFE))
+        poll_result = service.poll()
+
+        self.assertEqual(driver.sent_can[0].data[:4], bytes.fromhex("15030000"))
+        update = next(
+            item
+            for item in poll_result.legacy_updates
+            if item.table_index == 0 and item.row_index == 0
+        )
+        self.assertEqual(update.signal_name, "Hall current")
+        self.assertEqual(update.value, "-2")
+        self.assertEqual(update.unit, "0.1A")
+        self.assertEqual(update.table_index, 0)
+        self.assertEqual(update.row_index, 0)
+
+    def test_custom_request_group_is_added_to_snapshot_log(self):
+        driver = FakeDriver()
+        logger = NullLogManager()
+        runtime_config = dict(self.runtime_config)
+        runtime_config["REQUEST_GROUPS"] = [
+            [
+                {
+                    "index": 0x12345678,
+                    "name": "Renamed SOC",
+                    "unit": "custom",
+                    "bit_start": 8,
+                    "bit_length": 8,
+                    "signed": False,
+                }
+            ]
+        ]
+        service = CanApplicationService(
+            runtime_config=runtime_config,
+            bus_config=self.bus_config,
+            driver=driver,
+            legacy_catalog=build_legacy_catalog(),
+            dbc_runtime=self.dbc_runtime,
+            log_manager=logger,
+        )
+        service.open()
+
+        driver.can_frames.append(
+            self._read_var_response(0x1881F200, 0x12345678, 0x1234)
+        )
+        poll_result = service.poll()
+        service.write_legacy_snapshots(0)
+
+        self.assertEqual(len(poll_result.legacy_updates), 1)
+        self.assertEqual(poll_result.legacy_updates[0].signal_name, "Renamed SOC")
+        self.assertEqual(poll_result.legacy_updates[0].value, "18")
+        self.assertEqual(service.legacy_signal_state[0]["SOC"], "4660")
+        self.assertEqual(service.legacy_signal_state[0]["Renamed SOC"], "18")
+        self.assertEqual(logger.cluster_rows[0][1]["SOC"], "4660")
+        self.assertEqual(logger.cluster_rows[0][1]["Renamed SOC"], "18")
+        self.assertEqual(logger.legacy_signal_names, ["SOC", "Renamed SOC"])
+
     def test_send_next_balance_query_uses_balance_signal_id(self):
         result = self.service.send_next_balance_query(1)
 
@@ -311,7 +459,7 @@ class CanServiceTests(unittest.TestCase):
 
         self.service.send_next_balance_query(1)
         frame = self.driver.sent_can[-1]
-        self.assertEqual(frame.data[:4], bytes.fromhex("6E140000"))
+        self.assertEqual(frame.data[:4], bytes.fromhex("D6140000"))
 
     def test_balance_module_count_defaults_to_lecu_num_when_present(self):
         runtime_config = dict(self.runtime_config)
@@ -327,6 +475,111 @@ class CanServiceTests(unittest.TestCase):
 
         self.assertEqual(service.balance_module_count, 1)
         self.assertEqual(len(service.balance_request_signal_ids), 8)
+
+    def test_runtime_request_group_change_rebuilds_snapshot_log_columns(self):
+        self.service.set_active_cluster(0)
+        self.service.update_runtime_config(
+            {
+                "REQUEST_GROUPS": [
+                    [],
+                    [],
+                    [
+                        {
+                            "index": 803,
+                            "name": "请求分组3-803",
+                            "unit": "",
+                            "signed": False,
+                        }
+                    ],
+                ]
+            }
+        )
+
+        self.driver.can_frames.append(
+            self._read_var_response(0x1881F200, 803, 12)
+        )
+        self.service.poll()
+        self.service.write_legacy_snapshots(0)
+
+        self.assertEqual(
+            self.logger.legacy_signal_names,
+            ["SOC", "请求分组3-803"],
+        )
+        self.assertEqual(
+            self.logger.cluster_rows[-1][1]["请求分组3-803"],
+            "12",
+        )
+        self.assertEqual(self.logger.layout_updates, [])
+
+    def test_update_runtime_config_rebuilds_cluster_and_balance_layout(self):
+        self.service.set_active_cluster(2)
+
+        self.service.update_runtime_config(
+            {
+                "BCU_NUM": 1,
+                "LECU_NUM": 2,
+                "CELL_NUM": 12,
+                "CELL_Tem_NUM": 7,
+                "BALANCE_CELLS_PER_MODULE": 10,
+                "BALANCE_TEMP_PER_MODULE": 6,
+                "ADDRESLIST": ["00", "B0"],
+                "ADDRESLIST0x": ["0xB0"],
+            }
+        )
+
+        self.assertEqual(self.service.cluster_indices, [0, 1])
+        self.assertEqual(self.service.cluster_addresses, ["00", "B0"])
+        self.assertEqual(self.service.response_id_to_cluster[0x1881F2B0], 1)
+        self.assertEqual(self.service.balance_module_count, 2)
+        self.assertEqual(self.service.balance_cells_per_module, 10)
+        self.assertEqual(self.service.balance_temperature_per_module, 6)
+        self.assertEqual(len(self.service.balance_request_signal_ids), 16)
+        self.assertIsNone(self.service.active_cluster_index)
+        self.assertEqual(
+            self.logger.layout_updates[-1],
+            {
+                "cluster_indices": [0, 1],
+                "cluster_addresses": ["00", "B0"],
+                "legacy_signal_names": ["SOC"],
+                "voltage_count": 12,
+                "temperature_count": 7,
+                "balance_module_count": 2,
+                "balance_cells_per_module": 10,
+                "balance_temperature_per_module": 6,
+            },
+        )
+
+    def test_bcu_num_is_the_exact_cluster_count(self):
+        self.service.update_runtime_config(
+            {
+                "BCU_NUM": 2,
+                "ADDRESLIST": ["A0", "A1", "A2"],
+            }
+        )
+
+        self.assertEqual(self.service.cluster_indices, [0, 1])
+        self.assertEqual(self.service.cluster_addresses, ["A0", "A1"])
+        self.assertEqual(
+            self.service.cluster_index_to_address,
+            {0: "A0", 1: "A1"},
+        )
+        self.assertNotIn(0x1881F2A2, self.service.response_id_to_cluster)
+
+    def test_optional_address_00_does_not_consume_cluster_count(self):
+        self.service.update_runtime_config(
+            {
+                "BCU_NUM": 2,
+                "ADDRESLIST": ["00", "A0", "A1", "A2"],
+            }
+        )
+
+        self.assertEqual(self.service.cluster_indices, [0, 1, 2])
+        self.assertEqual(self.service.cluster_addresses, ["00", "A0", "A1"])
+        self.assertEqual(
+            self.service.cluster_index_to_address,
+            {0: "00", 1: "A0", 2: "A1"},
+        )
+        self.assertNotIn(0x1881F2A2, self.service.response_id_to_cluster)
 
     def test_read_factory_test_mode_reads_var_11(self):
         self.driver.canfd_frames.append(
@@ -367,6 +620,19 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(len(self.driver.sent_can), len(fields))
         self.assertEqual(self.driver.sent_can[0].frame_id, 0x1880A0F2)
         self.assertEqual(self.driver.sent_can[0].data[:4], (0x94900).to_bytes(4, "little"))
+
+    def test_new_alarm_fields_replace_reserved_alarm_definitions(self):
+        definitions = self.service.get_alarm_parameter_definitions()
+
+        self.assertEqual(
+            definitions[46].name,
+            "电池簇充电电池模块电压极差",
+        )
+        self.assertEqual(
+            definitions[47].name,
+            "电池簇放电电池模块电压极差",
+        )
+        self.assertEqual(definitions[48].name, "高压箱风扇故障")
 
     def test_read_alarm_parameter_record_uses_relaxed_profile_for_downstream_cluster(self):
         calls = []
@@ -421,6 +687,117 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(len(self.driver.sent_can), 2)
         self.assertEqual(len(drain_calls), 1)
         self.assertEqual(len(flush_calls), 1)
+
+    def test_read_data_u16_many_collects_out_of_order_batch_responses(self):
+        response_frame_id = 0x1881F2A0
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(response_frame_id, 0x102, 0x22),
+                self._read_var_response(response_frame_id, 0x100, 0x20),
+                self._read_var_response(response_frame_id, 0x101, 0x21),
+            ]
+        )
+
+        values = self.service.read_data_u16_many(
+            1,
+            [0x100, 0x101, 0x102],
+            timeout_s=0.05,
+            batch_size=3,
+        )
+
+        self.assertEqual(values, {0x100: 0x20, 0x101: 0x21, 0x102: 0x22})
+        self.assertEqual(len(self.driver.sent_can), 3)
+
+    def test_alarm_parameter_summary_uses_remote_batch_profile(self):
+        calls = []
+
+        def fake_read_many(cluster_index, data_ids, **kwargs):
+            data_ids = list(data_ids)
+            calls.append((cluster_index, data_ids, kwargs))
+            return {data_id: data_id & 0xFFFF for data_id in data_ids}
+
+        self.service.read_data_u16_many = fake_read_many
+
+        records = self.service.read_alarm_parameter_summary(1, timeout_s=0.5)
+
+        self.assertEqual(len(records), 64)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], 1)
+        self.assertEqual(len(calls[0][1]), 640)
+        self.assertEqual(calls[0][2]["batch_size"], 4)
+        self.assertGreaterEqual(calls[0][2]["timeout_s"], 1.2)
+        self.assertEqual(calls[0][2]["retries"], 2)
+
+    def test_poll_uses_nonblocking_receive_when_idle(self):
+        self.service.poll()
+
+        self.assertEqual(
+            self.driver.receive_can_args[-1],
+            (self.service.rx_batch_size, 0),
+        )
+        self.assertEqual(
+            self.driver.receive_canfd_args[-1],
+            (self.service.rx_batch_size, 0),
+        )
+
+    def test_bus_activity_snapshot_tracks_selected_cluster_tx_and_rx(self):
+        initial = self.service.get_bus_activity_snapshot(1)
+        self.assertTrue(initial["is_open"])
+        self.assertEqual(initial["tx_count"], 0)
+        self.assertEqual(initial["rx_count"], 0)
+
+        self.service.send_signal_query(1, 0x12345678)
+        after_tx = self.service.get_bus_activity_snapshot(1)
+        self.assertEqual(after_tx["tx_attempt_count"], 1)
+        self.assertEqual(after_tx["tx_count"], 1)
+        self.assertEqual(after_tx["tx_failure_count"], 0)
+        self.assertIsNotNone(after_tx["last_tx_age_s"])
+
+        self.driver.canfd_frames.append(
+            self._read_var_response(0x1881F2A0, 0x12345678, 88)
+        )
+        self.service.poll()
+        after_rx = self.service.get_bus_activity_snapshot(1)
+
+        self.assertEqual(after_rx["rx_count"], 1)
+        self.assertEqual(after_rx["rx_handled_count"], 1)
+        self.assertEqual(after_rx["last_rx_frame_id"], 0x1881F2A0)
+        self.assertIsNotNone(after_rx["last_rx_age_s"])
+        self.assertTrue(after_rx["last_rx_time"])
+
+    def test_poll_drains_multiple_batches_and_coalesces_latest_updates(self):
+        self.service.rx_batch_size = 64
+        self.service.rx_max_frames_per_poll = 512
+        self.service.rx_poll_budget_s = 1.0
+        self.driver.canfd_frames.extend(
+            self._read_var_response(0x1881F2A0, 0x12345678, value)
+            for value in range(300)
+        )
+
+        result = self.service.poll()
+
+        self.assertEqual(result.received_frame_count, 300)
+        self.assertEqual(result.handled_frame_count, 300)
+        self.assertEqual(result.update_count_before_coalesce, 600)
+        self.assertEqual(len(result.legacy_updates), 2)
+        self.assertEqual(
+            {
+                update.signal_name: update.value
+                for update in result.legacy_updates
+            },
+            {"SOC": "299", "SOH": "1"},
+        )
+        self.assertFalse(self.driver.canfd_frames)
+        self.assertGreater(len(self.driver.receive_canfd_args), 1)
+
+    def test_read_data_u16_wait_uses_nonblocking_receive(self):
+        with self.assertRaises(RuntimeError):
+            self.service.read_data_u16(1, 0x1234, timeout_s=0.01)
+
+        self.assertTrue(self.driver.receive_can_args)
+        self.assertTrue(self.driver.receive_canfd_args)
+        self.assertTrue(all(timeout_ms == 0 for _, timeout_ms in self.driver.receive_can_args))
+        self.assertTrue(all(timeout_ms == 0 for _, timeout_ms in self.driver.receive_canfd_args))
 
     def test_alarm_parameter_field_layout_matches_alarm_struct_payload(self):
         fields = self.service.get_alarm_parameter_fields()
@@ -587,6 +964,42 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(self.driver.sent_can[0].frame_id, 0x1888A0F2)
         self.assertEqual(self.driver.sent_can[0].data, bytes.fromhex("0400000008000000"))
 
+    def test_restore_factory_parameters_uses_factory_default_control_command(self):
+        self.driver.canfd_frames.extend(
+            [
+                RawFrame(
+                    frame_id=0x18A1F2A0,
+                    data=bytes([0x06, 0x67, 0x11, 0x12, 0x34, 0x56, 0x78, 0x00]),
+                    is_fd=True,
+                    extern_flag=True,
+                    remote_flag=False,
+                    brs=True,
+                ),
+                RawFrame(
+                    frame_id=0x18A1F2A0,
+                    data=bytes([0x02, 0x67, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                    is_fd=True,
+                    extern_flag=True,
+                    remote_flag=False,
+                    brs=True,
+                ),
+                RawFrame(
+                    frame_id=0x1889F2A0,
+                    data=bytes([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                    is_fd=True,
+                    extern_flag=True,
+                    remote_flag=False,
+                    brs=True,
+                ),
+            ]
+        )
+
+        self.assertTrue(self.service.restore_factory_parameters(1))
+
+        self.assertEqual(len(self.driver.sent_can), 3)
+        self.assertEqual(self.driver.sent_can[-1].frame_id, 0x1888A0F2)
+        self.assertEqual(self.driver.sent_can[-1].data, bytes.fromhex("0400000002000000"))
+
     def test_set_factory_test_mode_sends_unlock_and_control_sequence(self):
         seed = 0x12345678
         self.driver.canfd_frames.extend(
@@ -712,6 +1125,42 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(self.driver.sent_can[0].frame_id, 0x1880A0F2)
         self.assertEqual(self.driver.sent_can[0].data[:4], bytes.fromhex("0B000000"))
 
+    def test_monitor_query_sequence_contains_lower_controller_system_time_indexes(self):
+        requested_ids = []
+        for _ in range(len(self.service.index_monitor_signal_ids)):
+            self.service.send_next_monitor_query(1)
+            requested_ids.append(
+                int.from_bytes(self.driver.sent_can[-1].data[:4], byteorder="little")
+            )
+
+        self.assertEqual(requested_ids[-6:], list(range(0x25E, 0x264)))
+
+    def test_send_signal_query_uses_requested_active_page_index(self):
+        result = self.service.send_signal_query(1, 0x315)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(len(self.driver.sent_can), 1)
+        self.assertEqual(self.driver.sent_can[0].frame_id, 0x1880A0F2)
+        self.assertEqual(self.driver.sent_can[0].data[:4], bytes.fromhex("15030000"))
+
+    def test_send_next_power_diagnostic_query_starts_with_run_status(self):
+        result = self.service.send_next_power_diagnostic_query(1)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(self.driver.sent_can[0].frame_id, 0x1880A0F2)
+        self.assertEqual(self.driver.sent_can[0].data[:4], (12).to_bytes(4, "little"))
+
+    def test_poll_caches_power_diagnostic_index_value(self):
+        self.driver.canfd_frames.append(
+            self._read_var_response(0x1881F2A0, 791, 1)
+        )
+
+        result = self.service.poll()
+        snapshot = self.service.get_power_diagnostic_snapshot(1)
+
+        self.assertTrue(result.had_rx_frame)
+        self.assertEqual(snapshot[791], 1)
+
     def test_poll_decodes_monitor_query_values_into_snapshot(self):
         self.driver.canfd_frames.extend(
             [
@@ -731,6 +1180,203 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(snapshot["di_states"][0], 1)
         self.assertTrue(snapshot["relay_states"][0])
         self.assertEqual(snapshot["rt_values"][0], 250)
+
+    def test_poll_combines_lower_controller_system_time_protocol_indexes(self):
+        values = (2026, 8, 14, 16, 27, 35)
+        self.driver.canfd_frames.extend(
+            self._read_var_response(0x1881F2A0, data_id, value)
+            for data_id, value in zip(range(0x25E, 0x264), values)
+        )
+
+        self.service.poll()
+        snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["device_time"], "2026-08-14 16:27:35")
+
+    def test_poll_decodes_atomic_bms_send_time_protocol_frame(self):
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1CEDFFA0,
+                data=bytes((26, 8, 14, 16, 27, 36, 0, 0)),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+
+        result = self.service.poll()
+        snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["device_time"], "2026-08-14 16:27:36")
+        self.assertEqual(result.legacy_updates[-1].signal_name, "下位机系统时间")
+        self.assertEqual(result.legacy_updates[-1].value, "2026-08-14 16:27:36")
+
+    def test_monitor_snapshot_advances_device_time_between_protocol_frames(self):
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1CEDFFA0,
+                data=bytes((26, 8, 14, 16, 27, 36, 0, 0)),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+        self.service.poll()
+        _, received_at = self.service.device_time_anchors[1]
+
+        with patch(
+            "application.can_service.time.monotonic",
+            return_value=received_at + 2.2,
+        ):
+            snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["device_time"], "2026-08-14 16:27:38")
+
+    def test_protocol_indexes_recalibrate_device_time_after_atomic_frame(self):
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1CEDFFA0,
+                data=bytes((26, 8, 14, 16, 27, 36, 0, 0)),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+        self.service.poll()
+        self.driver.canfd_frames.extend(
+            self._read_var_response(0x1881F2A0, data_id, value)
+            for data_id, value in zip(
+                range(0x25E, 0x264),
+                (2026, 8, 14, 16, 28, 4),
+            )
+        )
+
+        self.service.poll()
+        snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["device_time"], "2026-08-14 16:28:04")
+
+    def test_stale_device_time_sample_does_not_pin_running_clock(self):
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1CEDFFA0,
+                data=bytes((26, 8, 14, 16, 27, 36, 0, 0)),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+        self.service.poll()
+        device_time, received_at = self.service.device_time_anchors[1]
+
+        with patch(
+            "application.can_service.time.monotonic",
+            return_value=received_at + 2.2,
+        ):
+            changed = self.service._set_device_time_anchor(1, device_time)
+            snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertFalse(changed)
+        self.assertEqual(snapshot["device_time"], "2026-08-14 16:27:38")
+
+    def test_poll_ignores_invalid_bms_send_time_protocol_frame(self):
+        self.driver.can_frames.append(
+            RawFrame(
+                frame_id=0x1CEDFFA0,
+                data=bytes((26, 13, 14, 16, 27, 36, 0, 0)),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+        )
+
+        result = self.service.poll()
+
+        self.assertFalse(result.had_rx_frame)
+        self.assertIsNone(self.service.get_index_monitor_snapshot(1)["device_time"])
+
+    def test_monitor_snapshot_hides_incomplete_or_invalid_device_time(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x25E, 2026),
+                self._read_var_response(0x1881F2A0, 0x25F, 13),
+                self._read_var_response(0x1881F2A0, 0x260, 14),
+                self._read_var_response(0x1881F2A0, 0x261, 16),
+                self._read_var_response(0x1881F2A0, 0x262, 27),
+                self._read_var_response(0x1881F2A0, 0x263, 35),
+            ]
+        )
+
+        self.service.poll()
+
+        self.assertIsNone(self.service.get_index_monitor_snapshot(1)["device_time"])
+
+    def test_monitor_snapshot_is_independent_from_custom_request_groups(self):
+        driver = FakeDriver()
+        runtime_config = dict(self.runtime_config)
+        runtime_config["REQUEST_GROUPS"] = [[{"index": 0x315, "name": "Hall current"}]]
+        service = CanApplicationService(
+            runtime_config=runtime_config,
+            bus_config=self.bus_config,
+            driver=driver,
+            legacy_catalog=build_legacy_catalog(),
+            dbc_runtime=self.dbc_runtime,
+            log_manager=NullLogManager(),
+        )
+        service.open()
+        driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x0D, 5234),
+                self._read_var_response(0x1881F2A0, 0x0E, 0xFF38),
+                self._read_var_response(0x1881F2A0, 16, 880),
+            ]
+        )
+
+        service.poll()
+        snapshot = service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["system_voltage"], 5234)
+        self.assertEqual(snapshot["system_current"], -200)
+        self.assertEqual(snapshot["soc"], 880)
+
+    def test_monitor_snapshot_uses_firmware_energy_indexes(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x1FD, 586),
+                self._read_var_response(0x1881F2A0, 0x1FE, 12),
+                self._read_var_response(0x1881F2A0, 0x252, 25678),
+                self._read_var_response(0x1881F2A0, 0x253, 16120),
+                self._read_var_response(0x1881F2A0, 0x90885, 5871),
+                self._read_var_response(0x1881F2A0, 0x90886, 0),
+            ]
+        )
+
+        self.service.poll()
+        snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["single_charge_kwh"], 586)
+        self.assertEqual(snapshot["single_discharge_kwh"], 12)
+        self.assertEqual(snapshot["remaining_discharge_kwh"], 25678)
+        self.assertEqual(snapshot["remaining_charge_kwh"], 16120)
+        self.assertEqual(snapshot["total_charge_kwh"], 5871)
+
+    def test_monitor_snapshot_uses_bcu615_60s_power_and_current_indexes(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x1AD, 1200),
+                self._read_var_response(0x1881F2A0, 0x1AE, 21000),
+                self._read_var_response(0x1881F2A0, 0x1AF, 900),
+                self._read_var_response(0x1881F2A0, 0x1B0, 19000),
+            ]
+        )
+
+        self.service.poll()
+        snapshot = self.service.get_index_monitor_snapshot(1)
+
+        self.assertEqual(snapshot["continuous_discharge_current"], 1200)
+        self.assertEqual(snapshot["continuous_discharge_power"], 21000)
+        self.assertEqual(snapshot["continuous_charge_current"], 900)
+        self.assertEqual(snapshot["continuous_charge_power"], 19000)
 
     def test_control_channel_sends_unlock_and_control_sequence(self):
         seed = 0x12345678
@@ -770,6 +1416,84 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(self.driver.sent_can[1].frame_id, 0x18A0A0F2)
         self.assertEqual(self.driver.sent_can[2].frame_id, 0x1888A0F2)
         self.assertEqual(self.driver.sent_can[2].data, bytes.fromhex("0200030001000000"))
+
+    def test_set_balance_cell_state_reads_word_sets_bit_and_writes_config_index(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x101E, 0x0005),
+                self._write_var_response(0x1883F2A0, 0x101E, success=1),
+            ]
+        )
+
+        word_value = self.service.set_balance_cell_state(1, 0, 1, True)
+
+        self.assertEqual(word_value, 0x0007)
+        self.assertEqual(len(self.driver.sent_can), 2)
+        self.assertEqual(self.driver.sent_can[0].frame_id, 0x1880A0F2)
+        self.assertEqual(self.driver.sent_can[0].data[:4], (0x101E).to_bytes(4, "little"))
+        self.assertEqual(self.driver.sent_can[1].frame_id, 0x1882A0F2)
+        self.assertEqual(self.driver.sent_can[1].data, bytes.fromhex("1E10000007000000"))
+
+    def test_set_balance_cell_state_uses_next_balance_config_word(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x1024, 0x0001),
+                self._write_var_response(0x1883F2A0, 0x1024, success=1),
+            ]
+        )
+
+        word_value = self.service.set_balance_cell_state(1, 0, 96, False)
+
+        self.assertEqual(word_value, 0x0000)
+        self.assertEqual(self.driver.sent_can[0].data[:4], (0x1024).to_bytes(4, "little"))
+        self.assertEqual(self.driver.sent_can[1].data, bytes.fromhex("2410000000000000"))
+
+    def test_set_balance_cell_state_uses_updated_stride_for_second_module(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x14D6, 0x0000),
+                self._write_var_response(0x1883F2A0, 0x14D6, success=1),
+            ]
+        )
+
+        word_value = self.service.set_balance_cell_state(1, 1, 0, True)
+
+        self.assertEqual(word_value, 0x0001)
+        self.assertEqual(self.driver.sent_can[0].data[:4], bytes.fromhex("D6140000"))
+        self.assertEqual(self.driver.sent_can[1].data, bytes.fromhex("D614000001000000"))
+
+    def test_set_balance_cell_state_keeps_manual_bits_when_readback_is_zero(self):
+        self.driver.canfd_frames.extend(
+            [
+                self._read_var_response(0x1881F2A0, 0x101E, 0x0000),
+                self._write_var_response(0x1883F2A0, 0x101E, success=1),
+                self._write_var_response(0x1883F2A0, 0x101E, success=1),
+            ]
+        )
+
+        first_word = self.service.set_balance_cell_state(1, 0, 0, True)
+        second_word = self.service.set_balance_cell_state(1, 0, 1, True)
+
+        self.assertEqual(first_word, 0x0001)
+        self.assertEqual(second_word, 0x0003)
+        self.assertEqual(len(self.driver.sent_can), 3)
+        self.assertEqual(self.driver.sent_can[0].data[:4], (0x101E).to_bytes(4, "little"))
+        self.assertEqual(self.driver.sent_can[1].data, bytes.fromhex("1E10000001000000"))
+        self.assertEqual(self.driver.sent_can[2].data, bytes.fromhex("1E10000003000000"))
+
+    def test_balance_decode_uses_device_readback_for_status_display(self):
+        self.service.balance_control_words["A0"][0x101E] = 0x0003
+        self.driver.canfd_frames.append(
+            self._read_var_response(0x1881F2A0, 0x101E, 0x0000),
+        )
+
+        poll_result = self.service.poll()
+        balance_values = self.service.get_legacy_balance_state_values("A0")
+
+        self.assertEqual(poll_result.balance_updates, ["A0"])
+        self.assertEqual(balance_values[0], ("M1-001", 0))
+        self.assertEqual(balance_values[1], ("M1-002", 0))
+        self.assertEqual(balance_values[2], ("M1-003", 0))
 
     def test_poll_decodes_legacy_response(self):
         self.driver.can_frames.append(
@@ -842,7 +1566,7 @@ class CanServiceTests(unittest.TestCase):
         self.driver.can_frames.append(
             RawFrame(
                 frame_id=0x1881F200,
-                data=bytes.fromhex("6E14000003000000"),
+                data=bytes.fromhex("D614000003000000"),
                 is_fd=False,
                 extern_flag=True,
                 remote_flag=False,
@@ -891,7 +1615,15 @@ class CanServiceTests(unittest.TestCase):
         self.assertTrue(poll_result.periodic_updates)
         self.assertIn("A1", poll_result.periodic_status)
         self.assertEqual(poll_result.periodic_updates[0].address, "A1")
-        self.assertTrue(self.service.get_dbc_catalog("A1"))
+        catalog = self.service.get_dbc_catalog("A1")
+        self.assertTrue(catalog)
+        message_row = next(
+            row for row in catalog if row["row_key"].startswith("BCU1201EFA0.")
+        )
+        self.assertEqual(message_row["message_name"], "BCU1201EFA1")
+        self.assertEqual(poll_result.periodic_updates[0].message_name, "BCU1201EFA1")
+        self.assertIn("BCU1201EFA1", poll_result.periodic_status["A1"])
+        self.assertEqual(self.logger.dbc_rows[0][3], "BCU1201EFA1")
         self.assertEqual(self.logger.dbc_rows[0][2], 0x1201EFA0)
 
     def test_poll_caches_alarm_message_0x1204efa0_and_terminal_temperature_values(self):
@@ -925,10 +1657,74 @@ class CanServiceTests(unittest.TestCase):
         self.assertEqual(self.service.get_periodic_terminal_temperature_values("00")[0][0], "01_1")
         self.assertEqual(self.logger.dbc_rows[0][2], 0x1204EFA0)
 
+    def test_poll_decodes_balance_temperature_frame_0x12c9(self):
+        payload = bytearray(64)
+        for index, value in enumerate([250, -51, 0]):
+            payload[index * 2 : index * 2 + 2] = int(value).to_bytes(
+                2,
+                "little",
+                signed=True,
+            )
+        self.driver.canfd_frames.append(
+            RawFrame(
+                frame_id=0x12C9EFA0,
+                data=bytes(payload),
+                is_fd=True,
+                extern_flag=True,
+                remote_flag=False,
+                brs=True,
+            )
+        )
+
+        poll_result = self.service.poll()
+
+        values = self.service.get_periodic_balance_temperature_values("A0")
+        self.assertEqual(values[0], 25)
+        self.assertAlmostEqual(values[1], -5.1)
+        self.assertEqual(values[2], 0)
+        self.assertEqual(len(values), 32)
+        self.assertEqual(len(poll_result.periodic_updates), 32)
+        self.assertIn("A0", poll_result.periodic_status)
+        self.assertEqual(self.logger.dbc_rows[0][2], 0x12C9EFA0)
+        self.assertEqual(self.logger.dbc_rows[0][3], "BCU12C9EFA0")
+
+    def test_poll_decodes_balance_temperature_second_frame_with_offset(self):
+        self.service.update_runtime_config(
+            {
+                "BCU_NUM": 1,
+                "LECU_NUM": 2,
+                "BALANCE_TEMP_PER_MODULE": 20,
+                "ADDRESLIST": ["00", "A0"],
+                "ADDRESLIST0x": ["0xA0"],
+            }
+        )
+        payload = bytearray(64)
+        payload[0:2] = (321).to_bytes(2, "little", signed=True)
+        self.driver.canfd_frames.append(
+            RawFrame(
+                frame_id=0x12CAEFA0,
+                data=bytes(payload),
+                is_fd=True,
+                extern_flag=True,
+                remote_flag=False,
+                brs=True,
+            )
+        )
+
+        self.service.poll()
+
+        values = self.service.get_periodic_balance_temperature_values("A0")
+        self.assertIsNone(values[31])
+        self.assertAlmostEqual(values[32], 32.1)
+        self.assertEqual(len(values), 40)
+
     def test_poll_uses_alarm_name_mapping_from_runtime_config(self):
         self.runtime_config["Alarm_name_key"] = {
             "001": "单体电压过高",
             "009": "单体压差过大",
+            "047": "电池簇充电电池模块电压极差",
+            "048": "电池簇放电电池模块电压极差",
+            "049": "高压箱风扇故障",
         }
         self.service = CanApplicationService(
             runtime_config=self.runtime_config,
@@ -956,6 +1752,15 @@ class CanServiceTests(unittest.TestCase):
         alarm_values = self.service.get_periodic_alarm_state_values("A0")
         self.assertEqual(alarm_values[0][0], "001 单体电压过高")
         self.assertEqual(alarm_values[8][0], "009 单体压差过大")
+        self.assertEqual(
+            alarm_values[46][0],
+            "047 电池簇充电电池模块电压极差",
+        )
+        self.assertEqual(
+            alarm_values[47][0],
+            "048 电池簇放电电池模块电压极差",
+        )
+        self.assertEqual(alarm_values[48][0], "049 高压箱风扇故障")
 
     def test_set_dbc_runtime_rebuilds_catalogs_and_clears_periodic_caches(self):
         self.service.periodic_voltage_values["00"][1] = 123
@@ -976,10 +1781,10 @@ class CanServiceTests(unittest.TestCase):
         self.service.write_legacy_snapshots()
         self.assertEqual(len(self.logger.cluster_rows), 3)
 
-    def test_write_legacy_snapshots_only_writes_dirty_clusters(self):
+    def test_write_legacy_snapshots_writes_current_state_each_interval(self):
         self.service.write_legacy_snapshots()
         self.service.write_legacy_snapshots()
-        self.assertEqual(len(self.logger.cluster_rows), 3)
+        self.assertEqual(len(self.logger.cluster_rows), 6)
 
         self.driver.can_frames.append(
             RawFrame(
@@ -992,8 +1797,12 @@ class CanServiceTests(unittest.TestCase):
         )
         self.service.poll()
         self.service.write_legacy_snapshots()
-        self.assertEqual(len(self.logger.cluster_rows), 4)
-        self.assertEqual(self.logger.cluster_rows[-1][0], 1)
+        self.assertEqual(len(self.logger.cluster_rows), 9)
+        cluster_1_rows = [
+            row for row in self.logger.cluster_rows[-3:] if row[0] == 1
+        ]
+        self.assertEqual(len(cluster_1_rows), 1)
+        self.assertEqual(cluster_1_rows[0][1]["SOC"], "4660")
 
     def test_write_legacy_snapshots_logs_voltage_temperature_and_balance(self):
         self.service.periodic_voltage_values["00"][1] = 3301

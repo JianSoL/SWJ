@@ -19,8 +19,9 @@ class BatteryMonitor(ModuleValuePage):
                 if values_per_group is not None
                 else config["CELL_NUM"]
             ),
-            items_per_row=5,
+            items_per_row=10,
             highlight_mode="extrema",
+            group_columns=1,
         )
 
     def setVoltageValues(self, voltages):

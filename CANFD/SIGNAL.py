@@ -131,8 +131,8 @@ BCUSignalQ = [
     0x1F,#SOE_DISP
     0x252,#剩余可放电[0.01KWH]
     0x253,#剩余可充电[0.01KWH]
-    0x1FD,#单次充电KWH[0.01KWH]
-    0x1FE,#单次放电KWH[0.01KWH]
+    0x1FD,#单次充电KWH[0.1KWH]
+    0x1FE,#单次放电KWH[0.1KWH]
     0x1D7,#OCV置位结果
     0x1C8,#满充满放状态
     0x1C9,#满充状态

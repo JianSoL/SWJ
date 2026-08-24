@@ -1,16 +1,15 @@
-# This is a sample Python script.
-
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+from pathlib import Path
+import sys
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
+REPO_ROOT = Path(__file__).resolve().parent
+CANFD_DIR = REPO_ROOT / "CANFD"
+
+if str(CANFD_DIR) not in sys.path:
+    sys.path.insert(0, str(CANFD_DIR))
+
+from CANFD.main import main
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    raise SystemExit(main())

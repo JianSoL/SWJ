@@ -148,6 +148,20 @@ class CxCanFdDriverTests(unittest.TestCase):
         self.assertEqual(self.fake_dll.receive_can_calls, 0)
         self.assertEqual(self.fake_dll.receive_canfd_calls, 0)
 
+    def test_receive_reuses_allocated_ctypes_buffers(self):
+        self.driver.open(self.config)
+
+        self.driver.receive_can(max_count=5)
+        can_buffer = self.driver._can_receive_buffer
+        self.driver.receive_can(max_count=5)
+
+        self.driver.receive_canfd(max_count=5)
+        canfd_buffer = self.driver._canfd_receive_buffer
+        self.driver.receive_canfd(max_count=5)
+
+        self.assertIs(self.driver._can_receive_buffer, can_buffer)
+        self.assertIs(self.driver._canfd_receive_buffer, canfd_buffer)
+
     def test_open_failure_closes_partial_handles(self):
         self.fake_dll.start_result = 0
 

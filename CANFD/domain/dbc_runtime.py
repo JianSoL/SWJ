@@ -24,13 +24,19 @@ class SignalDefinition:
     minimum: float
     maximum: float
     unit: str
+    mask: int = field(init=False, repr=False)
+    sign_bit: int = field(init=False, repr=False)
+    end_bit: int = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.mask = (1 << self.bit_length) - 1
+        self.sign_bit = 1 << (self.bit_length - 1) if self.bit_length > 0 else 0
+        self.end_bit = self.start_bit + self.bit_length
 
     def decode(self, payload_int):
-        mask = (1 << self.bit_length) - 1
-        raw_value = (payload_int >> self.start_bit) & mask
+        raw_value = (payload_int >> self.start_bit) & self.mask
         if self.is_signed and self.bit_length > 0:
-            sign_bit = 1 << (self.bit_length - 1)
-            if raw_value & sign_bit:
+            if raw_value & self.sign_bit:
                 raw_value -= 1 << self.bit_length
         physical_value = raw_value * self.factor + self.offset
         if isinstance(physical_value, float) and physical_value.is_integer():
@@ -84,6 +90,23 @@ class DbcRuntime:
         if address_value == 0x00 or 0xA0 <= address_value <= 0xAF:
             return (normalized_id & ~0xFF) | cls.CLUSTER_TEMPLATE_ADDRESS
         return normalized_id
+
+    @classmethod
+    def _display_message_name(cls, message_name, frame_id):
+        """Replace a template CAN ID suffix with the actual received CAN ID."""
+        normalized_id = cls.normalize_frame_id(frame_id)
+        match = re.search(r"(?P<frame_id>[0-9A-Fa-f]{8})$", str(message_name))
+        if match is None:
+            return message_name
+        embedded_id = int(match.group("frame_id"), 16)
+        if (embedded_id & 0xFF) != cls.CLUSTER_TEMPLATE_ADDRESS:
+            return message_name
+        display_id = (
+            (embedded_id & ~0xFF) | normalized_id
+            if normalized_id <= 0xFF
+            else normalized_id
+        )
+        return f"{message_name[:match.start('frame_id')]}{display_id:08X}"
 
     def _read_lines(self):
         for encoding in ("utf-8-sig", "gbk", "utf-8"):
@@ -153,7 +176,17 @@ class DbcRuntime:
             return list(catalog)
         template_address = self._template_address(normalized_address)
         if template_address != normalized_address:
-            return list(self.address_catalog.get(template_address, []))
+            display_address = int(normalized_address, 16)
+            return [
+                {
+                    **row,
+                    "message_name": self._display_message_name(
+                        row["message_name"],
+                        display_address,
+                    ),
+                }
+                for row in self.address_catalog.get(template_address, [])
+            ]
         return []
 
     def resolve_message(self, frame_id):
@@ -177,14 +210,15 @@ class DbcRuntime:
         payload_int = int.from_bytes(payload, byteorder="little", signed=False)
         available_bits = len(payload) * 8
         raw_address = self.frame_address(normalized_id)
+        display_message_name = self._display_message_name(message.name, normalized_id)
         signals = []
         for signal in message.signals:
-            if signal.start_bit + signal.bit_length > available_bits:
+            if signal.end_bit > available_bits:
                 continue
             signals.append(
                 {
                     "row_key": f"{message.name}.{signal.name}",
-                    "message_name": message.name,
+                    "message_name": display_message_name,
                     "signal_name": signal.name,
                     "value": signal.decode(payload_int),
                     "unit": signal.unit,
@@ -193,7 +227,7 @@ class DbcRuntime:
         return {
             "frame_id": message.frame_id,
             "raw_frame_id": normalized_id,
-            "message_name": message.name,
+            "message_name": display_message_name,
             "address": raw_address,
             "signals": signals,
         }

@@ -1,5 +1,12 @@
 # DCBMS
 
+## 维护入口
+
+- 系统分层与迁移路线：`docs/system_architecture.md`
+- 文件、代码和测试命名规范：`docs/coding_standards.md`
+- 全簇大屏视觉验收：`design-qa.md`
+- 大屏可重复截图：`scripts/capture_cluster_dashboard.py`
+
 DCBMS 是一个基于 `PyQt6` 的 CANFD 上位机程序，用于连接 CANFD 适配器，发送 BCU 请求报文，并展示周期报文、均衡状态、告警状态、单体电压、单体温度等数据。
 
 当前业务入口为 `CANFD/main.py`。根目录下的 `main.py` 只是示例脚本，不参与实际运行。
@@ -24,7 +31,7 @@ DCBMS/
 │  ├─ presentation/     # UI 层：主窗口和页面刷新
 │  ├─ tests/            # 单元测试和硬件冒烟脚本
 │  ├─ UI/               # Qt 生成界面和部件
-│  ├─ SINGLE/BCU.xlsx   # 旧协议信号定义
+│  ├─ SINGLE/BCU.yaml   # 旧协议信号定义
 │  ├─ conf.yaml         # 运行配置
 │  └─ main.py           # 实际程序入口
 ├─ ControlCANFD.dll     # CANFD 驱动 DLL
@@ -41,21 +48,19 @@ DCBMS/
 - `ControlCANFD.dll`
 - `DCFDV1.3.dbc`
 - `CANFD/conf.yaml`
-- `CANFD/SINGLE/BCU.xlsx`
+- `CANFD/SINGLE/BCU.yaml`
 
 Python 依赖：
 
 - `Python 3.8`
 - `PyQt6`
 - `PyYAML`
-- `pandas`
-- `openpyxl`
 - `PyInstaller`（仅打包时需要）
 
 示例安装：
 
 ```powershell
-pip install PyQt6 PyYAML pandas openpyxl pyinstaller
+pip install PyQt6 PyYAML numpy matplotlib pyinstaller
 ```
 
 ## 运行源码
@@ -146,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File .\build_exe.ps1 -PythonExe "D:\path\to\
 - `ControlCANFD.dll`
 - `DCFDV1.3.dbc`
 - `CANFD/conf.yaml`
-- `CANFD/SINGLE/BCU.xlsx`
+- `CANFD/SINGLE/BCU.yaml`
 - `CANFD/alarm.wav`
 - `CANFD/1.ico`
 
@@ -188,7 +193,7 @@ presentation -> application -> domain/infrastructure
 
 - `conf.yaml` 中簇地址配置是否正确
 - `DCFDV1.3.dbc` 是否与当前整车/电池协议版本一致
-- `BCU.xlsx` 是否与旧协议信号定义一致
+- `BCU.yaml` 是否与旧协议信号定义一致
 
 ### 3. 只复制了 `DCBMS.exe`，运行报缺文件
 

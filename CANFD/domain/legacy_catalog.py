@@ -1,8 +1,7 @@
 from collections import OrderedDict, defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List
 
-import pandas as pd
+import yaml
 
 from domain.models import LegacySignalDefinition
 
@@ -21,28 +20,90 @@ class LegacySignalCatalog:
                 seen_log_names.add(definition.name)
 
     @classmethod
-    def from_excel(cls, workbook_path, sheet_name="Sheet1"):
-        dataframe = pd.read_excel(Path(workbook_path), sheet_name=sheet_name)
-        return cls.from_dataframe(dataframe)
+    def from_yaml(cls, catalog_path):
+        catalog_path = Path(catalog_path)
+        with catalog_path.open("r", encoding="utf-8") as catalog_file:
+            payload = yaml.safe_load(catalog_file) or {}
 
-    @classmethod
-    def from_dataframe(cls, dataframe):
+        if not isinstance(payload, dict):
+            raise ValueError(f"Legacy signal catalog must be a mapping: {catalog_path}")
+        schema_version = payload.get("schema_version", 1)
+        if int(schema_version) != 1:
+            raise ValueError(
+                f"Unsupported legacy signal catalog schema_version "
+                f"{schema_version!r}: {catalog_path}"
+            )
+
+        signals = payload.get("signals")
+        if not isinstance(signals, list):
+            raise ValueError(
+                f"Legacy signal catalog must contain a signals list: {catalog_path}"
+            )
+
         definitions = []
-        for _, row in dataframe.iterrows():
+        required_fields = (
+            "id",
+            "name",
+            "unit",
+            "table",
+            "row",
+            "bit_start",
+            "bit_length",
+            "signed",
+            "save_to_log",
+        )
+        for item_index, item in enumerate(signals, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"Legacy signal #{item_index} must be a mapping: {catalog_path}"
+                )
+            missing = [field for field in required_fields if field not in item]
+            if missing:
+                joined = ", ".join(missing)
+                raise ValueError(
+                    f"Legacy signal #{item_index} is missing {joined}: {catalog_path}"
+                )
             definitions.append(
                 LegacySignalDefinition(
-                    signal_id=int(str(row.iloc[0]), 16),
-                    name=str(row.iloc[1]),
-                    unit=str(row.iloc[2]),
-                    table_index=int(row.iloc[5]),
-                    row_index=int(row.iloc[4]),
-                    bit_start=int(row.iloc[9]),
-                    bit_length=int(row.iloc[10]),
-                    signed=bool(int(row.iloc[11])),
-                    save_to_log=bool(int(row.iloc[6])),
+                    signal_id=cls._parse_signal_id(item["id"], item_index, catalog_path),
+                    name=str(item["name"]),
+                    unit=str(item["unit"]),
+                    table_index=int(item["table"]),
+                    row_index=int(item["row"]),
+                    bit_start=int(item["bit_start"]),
+                    bit_length=int(item["bit_length"]),
+                    signed=cls._parse_bool(item["signed"], "signed", item_index, catalog_path),
+                    save_to_log=cls._parse_bool(
+                        item["save_to_log"],
+                        "save_to_log",
+                        item_index,
+                        catalog_path,
+                    ),
                 )
             )
         return cls(definitions)
+
+    @staticmethod
+    def _parse_signal_id(value, item_index, catalog_path):
+        try:
+            if isinstance(value, str):
+                return int(value.strip(), 0)
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Legacy signal #{item_index} has invalid id {value!r}: {catalog_path}"
+            ) from exc
+
+    @staticmethod
+    def _parse_bool(value, field, item_index, catalog_path):
+        if isinstance(value, bool):
+            return value
+        if value in (0, 1):
+            return bool(value)
+        raise ValueError(
+            f"Legacy signal #{item_index} field {field} must be true or false: "
+            f"{catalog_path}"
+        )
 
     def get_definitions(self, signal_id):
         return list(self.definitions_by_id.get(signal_id, []))

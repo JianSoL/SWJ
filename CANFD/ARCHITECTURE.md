@@ -1,8 +1,15 @@
 # CANFD Architecture
 
+> The architecture is being migrated incrementally to the layered target in
+> `../docs/system_architecture.md`. Naming and maintenance rules live in
+> `../docs/coding_standards.md`. This file retains the detailed runtime and
+> driver notes for the existing CAN implementation.
+
 ## Layering
 
-The CANFD application is now split into three explicit layers.
+The legacy CAN runtime is split into three primary layers. New product slices
+add explicit application services, a unified data center, and protocol modules
+without destabilizing the proven hardware path.
 
 - Bottom layer: `infrastructure/cxcanfd_driver.py`
   - Wraps `ControlCANFD.dll` with the same open/init/start/send/receive/close sequence used by `cxcanfd_x64_v2.0.py`
@@ -21,8 +28,9 @@ The CANFD application is now split into three explicit layers.
 
 `main.py` is the only composition root.
 
+- Resolves runtime files through `application/runtime.py`
 - Loads runtime config from `conf.yaml`
-- Loads the legacy signal catalog from `SINGLE/BCU.xlsx`
+- Loads the legacy signal catalog from `SINGLE/BCU.yaml`
 - Loads the periodic DBC runtime from `DCFDV1.3.dbc`
 - Creates `SessionLogManager`
 - Creates `CxCanFdDriver`
@@ -34,6 +42,52 @@ The runtime dependency direction is strictly one-way:
 `presentation -> application -> domain/infrastructure`
 
 `infrastructure` never imports `presentation`, and `application` never imports Qt.
+
+## High-throughput Data Pipeline
+
+The receive path uses bounded work instead of one fixed receive call per UI tick.
+
+1. `CxCanFdDriver` reuses CAN and CAN FD `ctypes` receive buffers.
+2. `CanApplicationService.poll()` drains multiple batches up to a frame limit and a
+   wall-clock budget, so bursts are consumed without starving the Qt event loop.
+3. Repeated updates in one poll are coalesced by signal identity. The UI receives
+   only the newest value while service caches and raw logs still process every frame.
+4. Data polling and widget rendering use separate rates. Active pages collect every
+   10 ms while expensive value grids render the newest snapshot every 50 ms.
+5. `SessionLogManager` batches CSV flushes by row count or elapsed time. The regular
+   snapshot timer explicitly flushes all writers to preserve one-second durability.
+6. The service tracks TX/RX activity per cluster. The overview distinguishes adapter
+   connection from live BCU traffic and reports waiting, active, and receive-timeout
+   states without coupling protocol counters to Qt widgets.
+
+Runtime tuning is available in `conf.yaml`:
+
+- `RX_BATCH_SIZE`
+- `RX_MAX_FRAMES_PER_POLL`
+- `RX_POLL_BUDGET_MS`
+- `ACTIVE_POLL_INTERVAL_MS`
+- `POLL_INTERVAL_MS`
+- `QUERY_INTERVAL_MS`
+- `BACKGROUND_QUERY_INTERVAL_MS`
+- `ACTIVE_QUERY_BURST_SIZE`
+- `UI_REFRESH_INTERVAL_MS`
+- `COMMUNICATION_TILE_REFRESH_MS`
+- `COMMUNICATION_ACTIVE_TIMEOUT_MS`
+- `LOG_FLUSH_INTERVAL_MS`
+- `LOG_FLUSH_ROW_COUNT`
+
+## Product Runtime Boundary
+
+`application/runtime.py` centralizes product runtime paths and release resources.
+
+- Source mode reads resources from the repository tree.
+- PyInstaller mode prefers resources extracted under `sys._MEIPASS`.
+- Logs default to `CANFD/log` in source mode and to `log` beside the EXE in frozen mode.
+- `DCBMS_PROFILE` selects the `conf.yaml` profile.
+- `DCBMS_LOG_DIR` overrides the log output directory.
+
+The repository root `main.py` is now a launcher for the real `CANFD/main.py` entrypoint.
+Release validation lives in `scripts/release_check.ps1`.
 
 ## Driver Decision
 

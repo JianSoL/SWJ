@@ -13,17 +13,19 @@ datas = [
     (str(canfd_dir / "1.ico"), "."),
     (str(canfd_dir / "alarm.wav"), "."),
     (str(canfd_dir / "UI" / "release_theme.qss"), "UI"),
-    (str(canfd_dir / "SINGLE" / "BCU.xlsx"), "SINGLE"),
+    (str(canfd_dir / "SINGLE" / "BCU.yaml"), "SINGLE"),
+    (str(canfd_dir / "resources" / "index_catalog.json"), "resources"),
 ]
 
 hiddenimports = [
     "PyQt6.QtMultimedia",
-    "openpyxl",
+    "matplotlib.backends.backend_qtagg",
+    "mpl_toolkits.mplot3d",
 ]
 
 
 a = Analysis(
-    ["CANFD/main.py"],
+    ["main.py"],
     pathex=[str(project_root), str(canfd_dir)],
     binaries=[],
     datas=datas,
@@ -32,7 +34,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "matplotlib",
         "scipy",
     ],
     noarchive=False,

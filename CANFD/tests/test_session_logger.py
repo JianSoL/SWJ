@@ -56,6 +56,7 @@ class SessionLogManagerTests(unittest.TestCase):
             logger = SessionLogManager(
                 temp_dir,
                 cluster_indices=[0, 1],
+                cluster_addresses=["00", "A0"],
                 legacy_signal_names=["SOC"],
             )
 
@@ -64,11 +65,48 @@ class SessionLogManagerTests(unittest.TestCase):
 
             cluster_zero_path = logger.cluster_path_by_index[0]
             self.assertTrue(cluster_zero_path.exists())
+            self.assertEqual(cluster_zero_path.parent.name, "legacy")
+            self.assertEqual(cluster_zero_path.parent.parent.name, "cluster_0_00")
             with open(cluster_zero_path, "r", newline="", encoding="utf-8") as cluster_file:
                 rows = list(csv.reader(cluster_file))
 
         self.assertEqual(rows[0], ["timestamp", "SOC"])
         self.assertEqual(rows[1][1], "88")
+
+    def test_request_group_change_rotates_cluster_snapshot_with_new_header(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = SessionLogManager(
+                temp_dir,
+                cluster_indices=[0],
+                cluster_addresses=["00"],
+                legacy_signal_names=["SOC"],
+            )
+            original_path = logger.cluster_path_by_index[0]
+            logger.write_cluster_snapshot(0, {"SOC": "88"})
+
+            self.assertTrue(
+                logger.update_legacy_signal_names(["SOC", "请求分组3-803"])
+            )
+            updated_path = logger.cluster_path_by_index[0]
+            logger.write_cluster_snapshot(
+                0,
+                {"SOC": "89", "请求分组3-803": "12"},
+            )
+            logger.close()
+
+            self.assertNotEqual(original_path, updated_path)
+            with open(original_path, "r", newline="", encoding="utf-8") as log_file:
+                original_rows = list(csv.reader(log_file))
+            with open(updated_path, "r", newline="", encoding="utf-8") as log_file:
+                updated_rows = list(csv.reader(log_file))
+
+        self.assertEqual(original_rows[0], ["timestamp", "SOC"])
+        self.assertEqual(original_rows[1][1:], ["88"])
+        self.assertEqual(
+            updated_rows[0],
+            ["timestamp", "SOC", "请求分组3-803"],
+        )
+        self.assertEqual(updated_rows[1][1:], ["89", "12"])
 
     def test_logger_can_be_enabled_after_startup(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -94,6 +132,33 @@ class SessionLogManagerTests(unittest.TestCase):
             self.assertTrue(logger.tx_path.exists())
             self.assertTrue(logger.cluster_path_by_index[0].exists())
 
+    def test_logger_batches_rows_until_flush_boundary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = SessionLogManager(
+                temp_dir,
+                cluster_count=1,
+                legacy_signal_names=["SOC"],
+                flush_interval_ms=60000,
+                flush_row_count=3,
+            )
+            frame = RawFrame(
+                frame_id=0x1204EF00,
+                data=bytes([0xAA] * 8),
+                is_fd=False,
+                extern_flag=True,
+                remote_flag=False,
+            )
+
+            logger.log_tx("query", 0, frame, 1)
+            logger.log_tx("query", 0, frame, 1)
+            with open(logger.tx_path, "r", newline="", encoding="utf-8") as tx_file:
+                self.assertEqual(len(list(csv.reader(tx_file))), 1)
+
+            logger.flush()
+            with open(logger.tx_path, "r", newline="", encoding="utf-8") as tx_file:
+                self.assertEqual(len(list(csv.reader(tx_file))), 3)
+            logger.close()
+
     def test_periodic_snapshot_logs_create_separate_csv_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             logger = SessionLogManager(
@@ -105,11 +170,13 @@ class SessionLogManagerTests(unittest.TestCase):
                 temperature_count=2,
                 balance_module_count=1,
                 balance_cells_per_module=4,
+                balance_temperature_per_module=2,
             )
 
             logger.write_voltage_snapshot("00", [3301, 3302, None])
             logger.write_temperature_snapshot("00", [25.5, 26.0])
             logger.write_balance_snapshot("00", [1, 0, None, 1])
+            logger.write_balance_temperature_snapshot("00", [25, -5.1])
             logger.close()
 
             with open(
@@ -133,6 +200,40 @@ class SessionLogManagerTests(unittest.TestCase):
                 encoding="utf-8",
             ) as balance_file:
                 balance_rows = list(csv.reader(balance_file))
+            with open(
+                logger.balance_temperature_path_by_address["00"],
+                "r",
+                newline="",
+                encoding="utf-8",
+            ) as balance_temperature_file:
+                balance_temperature_rows = list(csv.reader(balance_temperature_file))
+
+            self.assertEqual(
+                logger.voltage_path_by_address["00"].parent.parent.name,
+                "cluster_0_00",
+            )
+            self.assertEqual(logger.voltage_path_by_address["00"].parent.name, "voltage")
+            self.assertEqual(
+                logger.temperature_path_by_address["00"].parent.parent.name,
+                "cluster_0_00",
+            )
+            self.assertEqual(
+                logger.temperature_path_by_address["00"].parent.name,
+                "temperature",
+            )
+            self.assertEqual(
+                logger.balance_path_by_address["00"].parent.parent.name,
+                "cluster_0_00",
+            )
+            self.assertEqual(logger.balance_path_by_address["00"].parent.name, "balance")
+            self.assertEqual(
+                logger.balance_temperature_path_by_address["00"].parent.parent.name,
+                "cluster_0_00",
+            )
+            self.assertEqual(
+                logger.balance_temperature_path_by_address["00"].parent.name,
+                "balance_temperature",
+            )
 
         self.assertEqual(voltage_rows[0], ["timestamp", "CELL_001", "CELL_002", "CELL_003"])
         self.assertEqual(voltage_rows[1][1:], ["3301", "3302", ""])
@@ -140,6 +241,8 @@ class SessionLogManagerTests(unittest.TestCase):
         self.assertEqual(temperature_rows[1][1:], ["25.5", "26"])
         self.assertEqual(balance_rows[0], ["timestamp", "M1-001", "M1-002", "M1-003", "M1-004"])
         self.assertEqual(balance_rows[1][1:], ["1", "0", "", "1"])
+        self.assertEqual(balance_temperature_rows[0], ["timestamp", "M1-BT001", "M1-BT002"])
+        self.assertEqual(balance_temperature_rows[1][1:], ["25", "-5.1"])
 
     def test_log_dbc_writes_separate_csv(self):
         with tempfile.TemporaryDirectory() as temp_dir:

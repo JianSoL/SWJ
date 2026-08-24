@@ -12,6 +12,7 @@ from ctypes import (
     c_void_p,
 )
 from pathlib import Path
+import sys
 
 from domain.models import BusConfig, RawFrame
 
@@ -110,11 +111,14 @@ class ZCAN_ReceiveFD_Data(Structure):
 def _resolve_dll_path():
     current_dir = Path(__file__).resolve().parent
     candidates = [
+        Path(sys._MEIPASS) / "ControlCANFD.dll"
+        if hasattr(sys, "_MEIPASS")
+        else None,
         current_dir.parent / "ControlCANFD.dll",
         current_dir.parent.parent / "ControlCANFD.dll",
     ]
     for candidate in candidates:
-        if candidate.exists():
+        if candidate is not None and candidate.exists():
             return candidate
     raise FileNotFoundError("ControlCANFD.dll not found")
 
@@ -149,6 +153,10 @@ class CxCanFdDriver:
         self.device_handle = INVALID_DEVICE_HANDLE
         self.channel_handle = INVALID_CHANNEL_HANDLE
         self.config = None
+        self._can_receive_buffer = None
+        self._can_receive_capacity = 0
+        self._canfd_receive_buffer = None
+        self._canfd_receive_capacity = 0
 
     def open(self, config):
         self.close()
@@ -260,7 +268,7 @@ class CxCanFdDriver:
         return self._receive_canfd_frames(count, timeout)
 
     def _receive_can_frames(self, count, timeout_ms):
-        receive_buffer = (ZCAN_Receive_Data * count)()
+        receive_buffer = self._get_receive_buffer(TYPE_CAN, count)
         received = self.dll.ZCAN_Receive(self.channel_handle, byref(receive_buffer), count, timeout_ms)
         frames = []
         for index in range(max(received, 0)):
@@ -278,7 +286,7 @@ class CxCanFdDriver:
         return frames
 
     def _receive_canfd_frames(self, count, timeout_ms):
-        receive_buffer = (ZCAN_ReceiveFD_Data * count)()
+        receive_buffer = self._get_receive_buffer(TYPE_CANFD, count)
         received = self.dll.ZCAN_ReceiveFD(self.channel_handle, byref(receive_buffer), count, timeout_ms)
         frames = []
         for index in range(max(received, 0)):
@@ -296,6 +304,18 @@ class CxCanFdDriver:
                 )
             )
         return frames
+
+    def _get_receive_buffer(self, frame_type, count):
+        if frame_type == TYPE_CAN:
+            if self._can_receive_capacity < count:
+                self._can_receive_buffer = (ZCAN_Receive_Data * count)()
+                self._can_receive_capacity = count
+            return self._can_receive_buffer
+
+        if self._canfd_receive_capacity < count:
+            self._canfd_receive_buffer = (ZCAN_ReceiveFD_Data * count)()
+            self._canfd_receive_capacity = count
+        return self._canfd_receive_buffer
 
     def _require_open(self):
         if not self.device_handle or not self.channel_handle:

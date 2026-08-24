@@ -25,9 +25,10 @@ class BatteryMonitorTem(ModuleValuePage):
                 if values_per_group is not None
                 else config["CELL_Tem_NUM"]
             ),
-            items_per_row=4,
+            items_per_row=10,
             value_formatter=_format_temperature,
             highlight_mode="extrema",
+            group_columns=1,
         )
 
     def setVoltageValues(self, voltages):

@@ -1,14 +1,22 @@
 import re
 import time
+from collections import deque
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List
 
+from application.config_loader import resolve_active_cluster_addresses
+from application.power_diagnostics import (
+    POWER_DIAGNOSTIC_POLL_SEQUENCE,
+    POWER_DIAGNOSTIC_SIGNAL_IDS,
+    POWER_DIAGNOSTIC_SIGNALS_BY_ID,
+)
 from domain.models import (
     AlarmParameterDefinition,
     AlarmParameterField,
     AlarmParameterRecord,
     HistoryLogRecord,
+    LegacySignalDefinition,
     LegacySignalUpdate,
     PeriodicSignalUpdate,
     PollResult,
@@ -20,7 +28,15 @@ CELL_VOLTAGE_PREFIX = "CELL_VOL_ID_"
 CELL_TEMPERATURE_PREFIX = "CELL_TEMP_ID_"
 ALARM_STATE_PREFIX = "ALARM_STATE_ID_"
 TERMINAL_TEMPERATURE_PREFIX = "BCU_TERMINAL_TEMP_"
+BALANCE_TEMPERATURE_PREFIX = "BALANCE_TEMP_ID_"
 ALARM_MESSAGE_FRAME_ID = 0x1204EFA0
+BALANCE_TEMPERATURE_FRAME_BASES = (0x12C9EF00, 0x12CAEF00)
+BALANCE_TEMPERATURE_FIRST_PAGE = 0xC9
+BALANCE_TEMPERATURE_VALUES_PER_FRAME = 32
+BALANCE_TEMPERATURE_UNIT = "0.1℃"
+BMS_SEND_TIME_PF = 0xED
+BMS_SEND_TIME_FRAME_MASK = 0x00FFFF00
+BMS_SEND_TIME_FRAME_PATTERN = (BMS_SEND_TIME_PF << 16) | 0x0000FF00
 CMD_READ_VAR = 0x80
 RESP_READ_VAR = 0x81
 CMD_WRITE_VAR = 0x82
@@ -49,9 +65,19 @@ HISTORY_LOG_CHUNK_COUNT = 8
 VAR_SYS_WORK_MODE = 11
 VAR_SYS_RUN_STATUS = 12
 VAR_SYS_SOC = 16
+VAR_SYS_TIME_YEAR = 0x25E
+VAR_SYS_TIME_MONTH = 0x25F
+VAR_SYS_TIME_DAY = 0x260
+VAR_SYS_TIME_HOUR = 0x261
+VAR_SYS_TIME_MINUTE = 0x262
+VAR_SYS_TIME_SECOND = 0x263
 WORK_MODE_NORMAL = 0
 WORK_MODE_GZ_TEST = 1
 VAR_SYS_USER_SET_SOC = 445
+VAR_SYS_ALLOW_DSCH_60S_CURR = 0x1AD
+VAR_SYS_ALLOW_DSCH_60S_POWER = 0x1AE
+VAR_SYS_ALLOW_CHRG_60S_CURR = 0x1AF
+VAR_SYS_ALLOW_CHRG_60S_POWER = 0x1B0
 ID_PAR_SYS_START = 0x90400
 ID_PAR_ALARM_START = 0x94900
 PAR_ALM_MAX_NUM = 32
@@ -65,14 +91,30 @@ ALARM_PARAMETER_REMOTE_SETTLE_DELAY_S = 0.005
 ALARM_PARAMETER_REMOTE_RECORD_MIN_TIMEOUT_S = 1.8
 ALARM_PARAMETER_REMOTE_RECORD_RETRIES = 3
 ALARM_PARAMETER_REMOTE_RECORD_SETTLE_DELAY_S = 0.01
+ALARM_PARAMETER_LOCAL_BATCH_SIZE = 12
+ALARM_PARAMETER_REMOTE_BATCH_SIZE = 4
 SECURITY_REQUEST_SEED = bytes((0x02, 0x27, 0x11))
 SECURITY_SEND_KEY = bytes((0x06, 0x27, 0x12))
 SECURITY_SEED_RESPONSE = bytes((0x06, 0x67, 0x11))
 SECURITY_KEY_RESPONSE = bytes((0x02, 0x67, 0x12))
-BALANCE_LOCAL_SIGNAL_IDS = tuple(0x101E + offset for offset in range(8))
-BALANCE_MODULE_STRIDE = 0x450
 BALANCE_MODULE_COUNT = 4
-BALANCE_CELLS_PER_MODULE = 104
+BALANCE_TEMP_PER_MODULE = 8
+BALANCE_BITS_PER_WORD = 16
+LECU_UNIFIED_VAR_START = 0x1000
+LECU_CELL_MAX_NUM = 104
+VAR_LECU_CELL_MAX_NUM = 11
+VAR_LECU_UINT_MAX_NUM = 64
+LECU_DATA_LENGTH = LECU_CELL_MAX_NUM * VAR_LECU_CELL_MAX_NUM + VAR_LECU_UINT_MAX_NUM
+BALANCE_MODULE_STRIDE = LECU_DATA_LENGTH
+BALANCE_CELLS_PER_MODULE = LECU_CELL_MAX_NUM
+VAR_LECU_UINT_BALANCE_CFG_START = 30
+BALANCE_CONTROL_WORD_COUNT = 8
+BALANCE_LOCAL_SIGNAL_IDS = tuple(
+    LECU_UNIFIED_VAR_START + VAR_LECU_UINT_BALANCE_CFG_START + offset
+    for offset in range(BALANCE_CONTROL_WORD_COUNT)
+)
+REQUEST_GROUP_CONFIG_KEY = "REQUEST_GROUPS"
+DEFAULT_REQUEST_GROUP_COUNT = 3
 BALANCE_STATE_PREFIXES = (
     "CELL_BALANCE_ID_",
     "CELL_BALANCE_STATE_ID_",
@@ -139,6 +181,42 @@ INDEX_MONITOR_SIGNAL_DEFINITIONS = (
 
 INDEX_MONITOR_SIGNAL_DEFINITIONS = (
     {"key": "work_mode", "data_id": VAR_SYS_WORK_MODE, "label": "Work mode", "unit": "", "signed": False},
+    {"key": "run_status", "data_id": VAR_SYS_RUN_STATUS, "label": "Run status", "unit": "", "signed": False},
+    {"key": "system_current", "data_id": 0x0E, "label": "System current", "unit": "0.1A", "signed": True},
+    {"key": "hall_current", "data_id": 0x315, "label": "Hall current", "unit": "0.1A", "signed": True},
+    {"key": "shunt_current", "data_id": 0x316, "label": "Shunt current", "unit": "0.1A", "signed": True},
+    {"key": "battery_voltage", "data_id": 0x5B, "label": "Battery voltage", "unit": "0.1V", "signed": False},
+    {"key": "system_voltage", "data_id": 0x0D, "label": "System voltage", "unit": "0.1V", "signed": False},
+    {"key": "pack_voltage", "data_id": 0x5C, "label": "Pack voltage", "unit": "0.1V", "signed": False},
+    {"key": "soc", "data_id": VAR_SYS_SOC, "label": "SOC", "unit": "0.1%", "signed": False},
+    {"key": "display_soc", "data_id": 0x12, "label": "Display SOC", "unit": "0.1%", "signed": False},
+    {"key": "soh", "data_id": 0x11, "label": "SOH", "unit": "0.1%", "signed": False},
+    {"key": "cell_max_soc", "data_id": 0x1C0, "label": "Cell max SOC", "unit": "0.1%", "signed": False},
+    {"key": "cell_min_soc", "data_id": 0x1C1, "label": "Cell min SOC", "unit": "0.1%", "signed": False},
+    {"key": "pure_soc", "data_id": 0x1C2, "label": "Pure SOC", "unit": "0.1%", "signed": False},
+    {"key": "revise_soc", "data_id": 0x1C3, "label": "Revise SOC", "unit": "0.1%", "signed": False},
+    {"key": "revise_soc_temp", "data_id": 0x1C4, "label": "Temp revise SOC", "unit": "0.1%", "signed": False},
+    {"key": "cell_min_soc_temp", "data_id": 0x1C5, "label": "Cell min temp SOC", "unit": "0.1%", "signed": False},
+    {"key": "cell_max_soc_temp", "data_id": 0x1C6, "label": "Cell max temp SOC", "unit": "0.1%", "signed": False},
+    {"key": "fuzzy_soc", "data_id": 0x1C7, "label": "Fuzzy SOC", "unit": "0.1%", "signed": False},
+    {"key": "diff_voltage", "data_id": 0x141, "label": "Voltage diff", "unit": "mV", "signed": False},
+    {"key": "diff_temp", "data_id": 0x142, "label": "Temperature diff", "unit": "0.1C", "signed": True},
+    {"key": "max_cell_voltage", "data_id": 0x148, "label": "Max cell voltage", "unit": "mV", "signed": False},
+    {"key": "max_cell_voltage_position", "data_id": 0x149, "label": "Max cell voltage position", "unit": "", "signed": False},
+    {"key": "min_cell_voltage", "data_id": 0x14B, "label": "Min cell voltage", "unit": "mV", "signed": False},
+    {"key": "min_cell_voltage_position", "data_id": 0x14C, "label": "Min cell voltage position", "unit": "", "signed": False},
+    {"key": "max_cell_temp", "data_id": 0x14E, "label": "Max cell temp", "unit": "0.1C", "signed": True},
+    {"key": "max_cell_temp_position", "data_id": 0x14F, "label": "Max cell temp position", "unit": "", "signed": False},
+    {"key": "min_cell_temp", "data_id": 0x151, "label": "Min cell temp", "unit": "0.1C", "signed": True},
+    {"key": "min_cell_temp_position", "data_id": 0x152, "label": "Min cell temp position", "unit": "", "signed": False},
+    {"key": "single_charge_kwh", "data_id": 0x1FD, "label": "Single charge energy", "unit": "0.1kWh", "signed": False},
+    {"key": "single_discharge_kwh", "data_id": 0x1FE, "label": "Single discharge energy", "unit": "0.1kWh", "signed": False},
+    {"key": "remaining_discharge_kwh", "data_id": 0x252, "label": "Remaining discharge energy", "unit": "0.01kWh", "signed": False},
+    {"key": "remaining_charge_kwh", "data_id": 0x253, "label": "Remaining charge energy", "unit": "0.01kWh", "signed": False},
+    {"key": "total_charge_kwh_low", "data_id": 0x90885, "label": "Total charge energy low", "unit": "0.01kWh", "signed": False},
+    {"key": "total_charge_kwh_high", "data_id": 0x90886, "label": "Total charge energy high", "unit": "0.01kWh", "signed": False},
+    {"key": "total_discharge_kwh_low", "data_id": 0x90887, "label": "Total discharge energy low", "unit": "0.01kWh", "signed": False},
+    {"key": "total_discharge_kwh_high", "data_id": 0x90888, "label": "Total discharge energy high", "unit": "0.01kWh", "signed": False},
     {"key": "module_count", "data_id": PAR_SYS_MODULE_COUNT, "label": "Module count", "unit": "", "signed": False},
     {"key": "afe_count", "data_id": PAR_SYS_AFE_COUNT, "label": "AFE count", "unit": "", "signed": False},
     {"key": "di1", "data_id": 36, "label": "DI1", "unit": "", "signed": False},
@@ -178,9 +256,24 @@ INDEX_MONITOR_SIGNAL_DEFINITIONS = (
     {"key": "avg_voltage", "data_id": 323, "label": "Average voltage", "unit": "mV", "signed": False},
     {"key": "avg_temp", "data_id": 324, "label": "Average temp", "unit": "0.1C", "signed": True},
     {"key": "online_lecu_num", "data_id": 325, "label": "Online LECU", "unit": "", "signed": False},
+    {"key": "continuous_discharge_current", "data_id": VAR_SYS_ALLOW_DSCH_60S_CURR, "label": "60S discharge current", "unit": "0.1A", "signed": False},
+    {"key": "continuous_discharge_power", "data_id": VAR_SYS_ALLOW_DSCH_60S_POWER, "label": "60S discharge power", "unit": "10W", "signed": False},
+    {"key": "continuous_charge_current", "data_id": VAR_SYS_ALLOW_CHRG_60S_CURR, "label": "60S charge current", "unit": "0.1A", "signed": False},
+    {"key": "continuous_charge_power", "data_id": VAR_SYS_ALLOW_CHRG_60S_POWER, "label": "60S charge power", "unit": "10W", "signed": False},
     {"key": "user_set_soc", "data_id": VAR_SYS_USER_SET_SOC, "label": "User SOC", "unit": "0.1%", "signed": False},
     {"key": "hvil_pwm_freq", "data_id": PAR_SYS_OUTPUT_HVIL_FREQ, "label": "HVIL freq", "unit": "0.1Hz", "signed": False},
     {"key": "hvil_pwm_duty", "data_id": PAR_SYS_OUTPUT_HVIL_DUTY_RATIO, "label": "HVIL duty", "unit": "0.1%", "signed": False},
+)
+
+# Current BMS clock fields exposed by the lower-controller host protocol through
+# CMD_READ_VAR/RESP_READ_VAR (0x80/0x81).
+INDEX_MONITOR_SIGNAL_DEFINITIONS += (
+    {"key": "device_time_year", "data_id": VAR_SYS_TIME_YEAR, "label": "BMS time year", "unit": "", "signed": False},
+    {"key": "device_time_month", "data_id": VAR_SYS_TIME_MONTH, "label": "BMS time month", "unit": "", "signed": False},
+    {"key": "device_time_day", "data_id": VAR_SYS_TIME_DAY, "label": "BMS time day", "unit": "", "signed": False},
+    {"key": "device_time_hour", "data_id": VAR_SYS_TIME_HOUR, "label": "BMS time hour", "unit": "", "signed": False},
+    {"key": "device_time_minute", "data_id": VAR_SYS_TIME_MINUTE, "label": "BMS time minute", "unit": "", "signed": False},
+    {"key": "device_time_second", "data_id": VAR_SYS_TIME_SECOND, "label": "BMS time second", "unit": "", "signed": False},
 )
 
 ALARM_PARAMETER_FIELDS = (
@@ -271,6 +364,9 @@ ALARM_PARAMETER_NAMES = (
     "簇总压校验差过大",
     "预充故障",
     "断路器故障",
+    "电池簇充电电池模块电压极差",
+    "电池簇放电电池模块电压极差",
+    "高压箱风扇故障",
 )
 
 
@@ -292,6 +388,14 @@ def config_int(runtime_config, key, default):
 def config_int_list(runtime_config, key, default):
     values = runtime_config.get(key, default)
     return [config_int({key: value}, key, value) for value in values]
+
+
+def config_bool(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 def decode_legacy_value(raw_word, bit_start, bit_length, signed):
@@ -341,19 +445,6 @@ class CanApplicationService:
         self.alarm_parameter_fields = list(ALARM_PARAMETER_FIELDS)
         self.alarm_parameter_definitions = self._build_alarm_parameter_definitions()
 
-        self.cluster_index_to_address = {
-            cluster_index: runtime_config["ADDRESLIST"][cluster_index]
-            for cluster_index in range(0, runtime_config["BCU_NUM"] + 1)
-        }
-        self.cluster_indices = list(self.cluster_index_to_address)
-        self.cluster_addresses = [
-            self.cluster_index_to_address[cluster_index]
-            for cluster_index in self.cluster_indices
-        ]
-        self.response_id_to_cluster = {
-            int(f"1881F2{address}", 16): cluster_index
-            for cluster_index, address in self.cluster_index_to_address.items()
-        }
         self.index_monitor_signal_definitions = list(INDEX_MONITOR_SIGNAL_DEFINITIONS)
         self.index_monitor_definitions_by_id = {}
         self.index_monitor_signal_ids = []
@@ -361,31 +452,77 @@ class CanApplicationService:
             data_id = int(definition["data_id"])
             self.index_monitor_signal_ids.append(data_id)
             self.index_monitor_definitions_by_id.setdefault(data_id, []).append(definition)
+        self.power_diagnostic_signal_ids = set(POWER_DIAGNOSTIC_SIGNAL_IDS)
+        self.power_diagnostic_poll_sequence = tuple(POWER_DIAGNOSTIC_POLL_SEQUENCE)
+        self._rebuild_runtime_layout()
+        self._rebuild_dbc_catalogs()
+        self.is_open = False
+        self.active_cluster_index = None
+        self.active_address = None
+        self._reset_runtime_state()
+        self._sync_snapshot_log_columns()
+
+    def _rebuild_runtime_layout(self):
+        self.rx_batch_size = max(
+            32,
+            config_int(self.runtime_config, "RX_BATCH_SIZE", 256),
+        )
+        self.rx_max_frames_per_poll = max(
+            self.rx_batch_size,
+            config_int(self.runtime_config, "RX_MAX_FRAMES_PER_POLL", 2048),
+        )
+        self.rx_poll_budget_s = max(
+            1,
+            config_int(self.runtime_config, "RX_POLL_BUDGET_MS", 8),
+        ) / 1000.0
+        address_list = resolve_active_cluster_addresses(self.runtime_config)
+        self.cluster_index_to_address = {
+            cluster_index: address
+            for cluster_index, address in enumerate(address_list)
+        }
+        self.cluster_indices = list(self.cluster_index_to_address)
+        self.cluster_addresses = [
+            self.cluster_index_to_address[cluster_index]
+            for cluster_index in self.cluster_indices
+        ]
+        self.cluster_address_to_index = {
+            address: cluster_index
+            for cluster_index, address in self.cluster_index_to_address.items()
+        }
+        self.response_id_to_cluster = {
+            int(f"1881F2{address}", 16): cluster_index
+            for cluster_index, address in self.cluster_index_to_address.items()
+        }
         self.balance_local_signal_ids = config_int_list(
-            runtime_config,
+            self.runtime_config,
             "BALANCE_LOCAL_SIGNAL_IDS",
             BALANCE_LOCAL_SIGNAL_IDS,
         )
         self.balance_module_stride = config_int(
-            runtime_config,
+            self.runtime_config,
             "BALANCE_MODULE_STRIDE",
             BALANCE_MODULE_STRIDE,
         )
         default_balance_module_count = int(
-            runtime_config.get(
+            self.runtime_config.get(
                 "LECU_NUM",
-                runtime_config.get("BALANCE_MODULE_COUNT", BALANCE_MODULE_COUNT),
+                self.runtime_config.get("BALANCE_MODULE_COUNT", BALANCE_MODULE_COUNT),
             )
         )
         self.balance_module_count = config_int(
-            runtime_config,
+            self.runtime_config,
             "BALANCE_MODULE_COUNT",
             default_balance_module_count,
         )
         self.balance_cells_per_module = config_int(
-            runtime_config,
+            self.runtime_config,
             "BALANCE_CELLS_PER_MODULE",
-            BALANCE_CELLS_PER_MODULE,
+            self.runtime_config.get("CELL_NUM", BALANCE_CELLS_PER_MODULE),
+        )
+        self.balance_temperature_per_module = config_int(
+            self.runtime_config,
+            "BALANCE_TEMP_PER_MODULE",
+            BALANCE_TEMP_PER_MODULE,
         )
         self.balance_words_per_module = len(self.balance_local_signal_ids)
         self.balance_request_signal_ids = []
@@ -395,11 +532,146 @@ class CanApplicationService:
                 signal_id = local_signal_id + module_index * self.balance_module_stride
                 self.balance_request_signal_ids.append(signal_id)
                 self.balance_signal_layout[signal_id] = (module_index, word_index)
-        self._rebuild_dbc_catalogs()
-        self.is_open = False
-        self.active_cluster_index = None
-        self.active_address = None
-        self._reset_runtime_state()
+        self._rebuild_request_groups()
+
+    def _rebuild_request_groups(self):
+        configured_groups = self.runtime_config.get(REQUEST_GROUP_CONFIG_KEY)
+        if configured_groups is None:
+            self.request_group_definitions = self._legacy_request_groups()
+        else:
+            self.request_group_definitions = self._custom_request_groups(
+                configured_groups
+            )
+
+        self.request_definitions = [
+            definition
+            for group in self.request_group_definitions
+            for definition in group
+        ]
+        self.request_definitions_by_id = {}
+        self.request_query_signal_ids = []
+        for definition in self.request_definitions:
+            self.request_definitions_by_id.setdefault(
+                definition.signal_id,
+                [],
+            ).append(definition)
+            self.request_query_signal_ids.append(definition.signal_id)
+        self._rebuild_snapshot_log_definitions()
+
+    def _rebuild_snapshot_log_definitions(self):
+        definitions_by_name = {}
+        for definition in self.legacy_catalog.definitions:
+            if definition.save_to_log:
+                definitions_by_name.setdefault(definition.name, definition)
+
+        if self.runtime_config.get(REQUEST_GROUP_CONFIG_KEY) is not None:
+            for definition in self.request_definitions:
+                definitions_by_name.setdefault(definition.name, definition)
+
+        self.snapshot_log_definitions = list(definitions_by_name.values())
+        self.snapshot_log_signal_names = [
+            definition.name for definition in self.snapshot_log_definitions
+        ]
+        self.legacy_log_definitions_by_id = {}
+        for definition in self.snapshot_log_definitions:
+            self.legacy_log_definitions_by_id.setdefault(
+                definition.signal_id,
+                [],
+            ).append(definition)
+
+    def _sync_snapshot_log_columns(self):
+        update_signal_names = getattr(
+            self.log_manager,
+            "update_legacy_signal_names",
+            None,
+        )
+        if callable(update_signal_names):
+            update_signal_names(self.snapshot_log_signal_names)
+
+    def _legacy_request_groups(self):
+        max_table_index = DEFAULT_REQUEST_GROUP_COUNT - 1
+        for definition in self.legacy_catalog.definitions:
+            if definition.table_index >= 0:
+                max_table_index = max(max_table_index, int(definition.table_index))
+        groups = [[] for _ in range(max_table_index + 1)]
+        for definition in sorted(
+            self.legacy_catalog.definitions,
+            key=lambda item: (item.table_index, item.row_index),
+        ):
+            if definition.table_index < 0 or definition.row_index < 0:
+                continue
+            groups[definition.table_index].append(definition)
+        return groups
+
+    def _legacy_definition_for_signal(self, signal_id):
+        matches = self.legacy_catalog.get_definitions(signal_id)
+        if matches:
+            return matches[0]
+        return None
+
+    def _custom_request_groups(self, configured_groups):
+        if not isinstance(configured_groups, list):
+            return self._legacy_request_groups()
+
+        groups = []
+        group_count = max(DEFAULT_REQUEST_GROUP_COUNT, len(configured_groups))
+        for table_index in range(group_count):
+            raw_group = (
+                configured_groups[table_index]
+                if table_index < len(configured_groups)
+                else []
+            )
+            if not isinstance(raw_group, list):
+                raw_group = []
+            group_definitions = []
+            for row_index, raw_entry in enumerate(raw_group):
+                definition = self._custom_request_definition(
+                    raw_entry,
+                    table_index,
+                    row_index,
+                )
+                if definition is not None:
+                    group_definitions.append(definition)
+            groups.append(group_definitions)
+        return groups
+
+    def _custom_request_definition(self, raw_entry, table_index, row_index):
+        if raw_entry is None or raw_entry == "":
+            return None
+        if isinstance(raw_entry, dict):
+            raw_signal_id = raw_entry.get(
+                "index",
+                raw_entry.get("signal_id", raw_entry.get("data_id")),
+            )
+        else:
+            raw_signal_id = raw_entry
+            raw_entry = {}
+        try:
+            signal_id = config_int({"index": raw_signal_id}, "index", raw_signal_id)
+        except (TypeError, ValueError):
+            return None
+
+        legacy_definition = self._legacy_definition_for_signal(signal_id)
+        fallback_name = (
+            legacy_definition.name
+            if legacy_definition is not None
+            else f"索引 0x{signal_id:X}"
+        )
+        fallback_unit = legacy_definition.unit if legacy_definition is not None else ""
+        fallback_signed = (
+            legacy_definition.signed if legacy_definition is not None else False
+        )
+        return LegacySignalDefinition(
+            signal_id=signal_id,
+            name=str(raw_entry.get("name") or fallback_name),
+            unit=str(raw_entry.get("unit") or fallback_unit),
+            table_index=int(table_index),
+            row_index=int(row_index),
+            bit_start=config_int(raw_entry, "bit_start", 0),
+            bit_length=config_int(raw_entry, "bit_length", 16),
+            signed=config_bool(raw_entry.get("signed"), fallback_signed),
+            save_to_log=config_bool(raw_entry.get("save_to_log"), False),
+        )
 
     def open(self):
         self.reopen()
@@ -425,6 +697,41 @@ class CanApplicationService:
         self.bus_config = replace(self.bus_config, **kwargs)
         return self.bus_config
 
+    def update_runtime_config(self, updates):
+        updates = dict(updates)
+        previous_active_cluster = self.active_cluster_index
+        self.runtime_config.update(updates)
+        self._rebuild_runtime_layout()
+        self._rebuild_dbc_catalogs()
+        self._reset_runtime_state()
+
+        request_groups_only = set(updates) == {REQUEST_GROUP_CONFIG_KEY}
+        update_signal_names = getattr(
+            self.log_manager,
+            "update_legacy_signal_names",
+            None,
+        )
+        update_log_layout = getattr(self.log_manager, "update_layout", None)
+        if request_groups_only and callable(update_signal_names):
+            update_signal_names(self.snapshot_log_signal_names)
+        elif callable(update_log_layout):
+            update_log_layout(
+                cluster_indices=self.cluster_indices,
+                cluster_addresses=self.cluster_addresses,
+                legacy_signal_names=self.snapshot_log_signal_names,
+                voltage_count=int(self.runtime_config.get("CELL_NUM", 0)),
+                temperature_count=int(self.runtime_config.get("CELL_Tem_NUM", 0)),
+                balance_module_count=self.balance_module_count,
+                balance_cells_per_module=self.balance_cells_per_module,
+                balance_temperature_per_module=self.balance_temperature_per_module,
+            )
+
+        if previous_active_cluster in self.cluster_index_to_address:
+            self.set_active_cluster(previous_active_cluster)
+        else:
+            self.set_active_cluster(None)
+        return self.runtime_config
+
     def close(self):
         if self.is_open:
             self.driver.close()
@@ -435,6 +742,24 @@ class CanApplicationService:
 
     def get_dbc_catalog(self, address):
         return list(self.dbc_catalogs.get(address, []))
+
+    def get_request_group_definitions(self):
+        return [
+            [
+                {
+                    "index": definition.signal_id,
+                    "name": definition.name,
+                    "unit": definition.unit,
+                    "signed": definition.signed,
+                    "bit_start": definition.bit_start,
+                    "bit_length": definition.bit_length,
+                    "table_index": definition.table_index,
+                    "row_index": definition.row_index,
+                }
+                for definition in group
+            ]
+            for group in self.request_group_definitions
+        ]
 
     def set_dbc_runtime(self, dbc_runtime):
         self.dbc_runtime = dbc_runtime
@@ -452,8 +777,8 @@ class CanApplicationService:
                 raise RuntimeError(f"Invalid cluster index: {cluster_index}")
             self.active_cluster_index = cluster_index
             self.active_address = self.cluster_index_to_address[cluster_index]
-        self.pending_can_frames = []
-        self.pending_canfd_frames = []
+        self.pending_can_frames.clear()
+        self.pending_canfd_frames.clear()
 
     def _is_active_cluster(self, cluster_index):
         return self.active_cluster_index is None or int(cluster_index) == self.active_cluster_index
@@ -470,15 +795,167 @@ class CanApplicationService:
         if not self.is_open:
             return result
 
-        for frame in self._receive_pending_can_frames(max_count=200):
-            result.had_rx_frame = self._handle_frame(frame, "rx_can", result) or result.had_rx_frame
-
-        for frame in self._receive_pending_canfd_frames(max_count=200):
-            result.had_rx_frame = (
-                self._handle_frame(frame, "rx_canfd", result) or result.had_rx_frame
+        started_at = time.perf_counter()
+        deadline = started_at + self.rx_poll_budget_s
+        remaining = self.rx_max_frames_per_poll
+        while remaining > 0:
+            batch_size = min(self.rx_batch_size, remaining)
+            can_frames = self._receive_pending_can_frames(max_count=batch_size)
+            remaining -= self._handle_frame_batch(
+                can_frames,
+                "rx_can",
+                result,
             )
 
+            if remaining <= 0:
+                break
+            batch_size = min(self.rx_batch_size, remaining)
+            canfd_frames = self._receive_pending_canfd_frames(max_count=batch_size)
+            remaining -= self._handle_frame_batch(
+                canfd_frames,
+                "rx_canfd",
+                result,
+            )
+
+            if not can_frames and not canfd_frames:
+                break
+            if time.perf_counter() >= deadline:
+                break
+
+        self._coalesce_poll_updates(result)
+        result.poll_elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         return result
+
+    def _handle_frame_batch(self, frames, frame_kind, result):
+        result.received_frame_count += len(frames)
+        for frame in frames:
+            handled = self._handle_frame(frame, frame_kind, result)
+            self._record_rx_activity(frame, handled)
+            if handled:
+                result.had_rx_frame = True
+                result.handled_frame_count += 1
+        return len(frames)
+
+    def _record_rx_activity(self, frame, handled):
+        now_monotonic = time.monotonic()
+        now_text = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.rx_frame_count += 1
+        self.last_rx_monotonic = now_monotonic
+        self.last_rx_time_text = now_text
+        self.last_rx_frame_id = int(frame.frame_id)
+        if handled:
+            self.rx_handled_frame_count += 1
+
+        address = f"{int(frame.frame_id) & 0xFF:02X}"
+        cluster_index = self.cluster_address_to_index.get(address)
+        if cluster_index is None:
+            return
+        self.rx_frame_count_by_cluster[cluster_index] += 1
+        self.last_rx_monotonic_by_cluster[cluster_index] = now_monotonic
+        self.last_rx_time_text_by_cluster[cluster_index] = now_text
+        self.last_rx_frame_id_by_cluster[cluster_index] = int(frame.frame_id)
+        if handled:
+            self.rx_handled_frame_count_by_cluster[cluster_index] += 1
+
+    def _record_tx_activity(self, cluster_index, result):
+        cluster_index = int(cluster_index)
+        self.tx_attempt_count += 1
+        if cluster_index in self.tx_attempt_count_by_cluster:
+            self.tx_attempt_count_by_cluster[cluster_index] += 1
+        if int(result) <= 0:
+            self.tx_failure_count += 1
+            if cluster_index in self.tx_failure_count_by_cluster:
+                self.tx_failure_count_by_cluster[cluster_index] += 1
+            return
+
+        now_monotonic = time.monotonic()
+        now_text = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.tx_frame_count += 1
+        self.last_tx_monotonic = now_monotonic
+        self.last_tx_time_text = now_text
+        if cluster_index in self.tx_frame_count_by_cluster:
+            self.tx_frame_count_by_cluster[cluster_index] += 1
+            self.last_tx_monotonic_by_cluster[cluster_index] = now_monotonic
+            self.last_tx_time_text_by_cluster[cluster_index] = now_text
+
+    def get_bus_activity_snapshot(self, cluster_index=None):
+        now_monotonic = time.monotonic()
+        if cluster_index is None:
+            tx_count = self.tx_frame_count
+            tx_attempt_count = self.tx_attempt_count
+            tx_failure_count = self.tx_failure_count
+            rx_count = self.rx_frame_count
+            rx_handled_count = self.rx_handled_frame_count
+            last_tx_monotonic = self.last_tx_monotonic
+            last_rx_monotonic = self.last_rx_monotonic
+            last_tx_time_text = self.last_tx_time_text
+            last_rx_time_text = self.last_rx_time_text
+            last_rx_frame_id = self.last_rx_frame_id
+        else:
+            cluster_index = int(cluster_index)
+            tx_count = self.tx_frame_count_by_cluster.get(cluster_index, 0)
+            tx_attempt_count = self.tx_attempt_count_by_cluster.get(cluster_index, 0)
+            tx_failure_count = self.tx_failure_count_by_cluster.get(cluster_index, 0)
+            rx_count = self.rx_frame_count_by_cluster.get(cluster_index, 0)
+            rx_handled_count = self.rx_handled_frame_count_by_cluster.get(
+                cluster_index,
+                0,
+            )
+            last_tx_monotonic = self.last_tx_monotonic_by_cluster.get(cluster_index)
+            last_rx_monotonic = self.last_rx_monotonic_by_cluster.get(cluster_index)
+            last_tx_time_text = self.last_tx_time_text_by_cluster.get(cluster_index, "")
+            last_rx_time_text = self.last_rx_time_text_by_cluster.get(cluster_index, "")
+            last_rx_frame_id = self.last_rx_frame_id_by_cluster.get(cluster_index)
+
+        return {
+            "is_open": bool(self.is_open),
+            "cluster_index": cluster_index,
+            "tx_count": tx_count,
+            "tx_attempt_count": tx_attempt_count,
+            "tx_failure_count": tx_failure_count,
+            "rx_count": rx_count,
+            "rx_handled_count": rx_handled_count,
+            "last_tx_time": last_tx_time_text,
+            "last_rx_time": last_rx_time_text,
+            "last_tx_age_s": (
+                None
+                if last_tx_monotonic is None
+                else max(now_monotonic - last_tx_monotonic, 0.0)
+            ),
+            "last_rx_age_s": (
+                None
+                if last_rx_monotonic is None
+                else max(now_monotonic - last_rx_monotonic, 0.0)
+            ),
+            "last_rx_frame_id": last_rx_frame_id,
+        }
+
+    @staticmethod
+    def _coalesce_poll_updates(result):
+        result.update_count_before_coalesce = (
+            len(result.legacy_updates) + len(result.periodic_updates)
+        )
+        if len(result.legacy_updates) > 1:
+            latest_legacy_updates = {}
+            for update in result.legacy_updates:
+                key = (
+                    update.cluster_index,
+                    update.signal_id,
+                    update.table_index,
+                    update.row_index,
+                    update.signal_name,
+                )
+                latest_legacy_updates[key] = update
+            result.legacy_updates = list(latest_legacy_updates.values())
+
+        if len(result.periodic_updates) > 1:
+            latest_periodic_updates = {}
+            for update in result.periodic_updates:
+                latest_periodic_updates[(update.address, update.row_key)] = update
+            result.periodic_updates = list(latest_periodic_updates.values())
+
+        if len(result.balance_updates) > 1:
+            result.balance_updates = list(dict.fromkeys(result.balance_updates))
 
     def _handle_frame(self, frame, frame_kind, result):
         balance_update = self._decode_balance_response(frame)
@@ -497,8 +974,41 @@ class CanApplicationService:
             result.legacy_updates.extend(legacy_updates)
             return True
 
+        device_time_update = self._decode_device_time_frame(frame, frame_kind)
+        if device_time_update is not None:
+            self.log_manager.log_rx(
+                frame_kind,
+                frame,
+                [
+                    f"cluster={device_time_update.cluster_index}",
+                    "protocol=bms_send_time",
+                    f"device_time={device_time_update.value}",
+                ],
+            )
+            result.legacy_updates.append(device_time_update)
+            return True
+
+        if (
+            self.active_address is not None
+            and f"{int(frame.frame_id) & 0xFF:02X}" != self.active_address
+        ):
+            return False
+
         decoded = self.dbc_runtime.decode_frame(frame.frame_id, frame.data) if self.dbc_runtime else None
         if decoded is None:
+            balance_temperature_update = self._decode_balance_temperature_frame(
+                frame,
+                frame_kind,
+            )
+            if balance_temperature_update is not None:
+                address, updates = balance_temperature_update
+                result.periodic_updates.extend(updates)
+                result.periodic_status[address] = (
+                    f"地址 {address} 已更新，最近报文 "
+                    f"BCU{frame.frame_id:08X}，时间 "
+                    f"{datetime.now().strftime('%H:%M:%S.%f')[:-3]}"
+                )
+                return True
             return False
         if not self._is_active_address(decoded["address"]):
             return False
@@ -546,9 +1056,19 @@ class CanApplicationService:
         signal_id = int.from_bytes(frame.data[:4], byteorder="little", signed=False)
         if signal_id in self.balance_signal_layout:
             return []
-        definitions = self.legacy_catalog.get_definitions(signal_id)
+        definitions = self.request_definitions_by_id.get(signal_id, [])
+        log_definitions = self.legacy_log_definitions_by_id.get(signal_id, [])
         monitor_definitions = self.index_monitor_definitions_by_id.get(signal_id, [])
-        if not definitions and not monitor_definitions:
+        diagnostic_signal = (
+            signal_id in self.power_diagnostic_signal_ids
+            and (frame.data_len < 7 or frame.data[6] != 0)
+        )
+        if (
+            not definitions
+            and not log_definitions
+            and not monitor_definitions
+            and not diagnostic_signal
+        ):
             self._debug_print(
                 f"legacy_unmapped,source={source_kind},cluster={cluster_index},signal_id=0x{signal_id:08X}"
             )
@@ -556,6 +1076,9 @@ class CanApplicationService:
 
         raw_word = frame.data[4] | (frame.data[5] << 8)
         self.legacy_request_raw_words[cluster_index][signal_id] = raw_word
+        self._update_legacy_log_state(cluster_index, log_definitions, raw_word)
+        if diagnostic_signal:
+            self.power_diagnostic_raw_values[cluster_index][signal_id] = raw_word
         updates = []
         for definition in definitions:
             value = decode_legacy_value(
@@ -578,12 +1101,24 @@ class CanApplicationService:
                 )
             )
             self.legacy_request_raw_values[cluster_index][definition.name] = value
-            if definition.save_to_log:
-                self.legacy_signal_state[cluster_index][definition.name] = value_text
-                self.legacy_signal_dirty[cluster_index] = True
             self._debug_print(
                 f"legacy_match,source={source_kind},cluster={cluster_index},"
                 f"signal_id=0x{signal_id:08X},signal={definition.name},value={value_text}"
+            )
+
+        if diagnostic_signal:
+            diagnostic_definition = POWER_DIAGNOSTIC_SIGNALS_BY_ID[signal_id]
+            updates.append(
+                LegacySignalUpdate(
+                    cluster_index=cluster_index,
+                    signal_id=signal_id,
+                    signal_name=diagnostic_definition.key,
+                    value=str(raw_word),
+                    unit=diagnostic_definition.unit,
+                    table_index=-1,
+                    row_index=-1,
+                    source_kind=source_kind,
+                )
             )
 
         if monitor_definitions and frame.data_len >= 7 and frame.data[6] == 0:
@@ -598,6 +1133,8 @@ class CanApplicationService:
             )
             value_text = str(value)
             self.index_monitor_values[cluster_index][definition["key"]] = value
+            if definition["key"] == "device_time_second":
+                self._update_device_time_anchor_from_components(cluster_index)
             updates.append(
                 LegacySignalUpdate(
                     cluster_index=cluster_index,
@@ -616,6 +1153,76 @@ class CanApplicationService:
             )
         return updates
 
+    def _decode_device_time_frame(self, frame, source_kind):
+        if (
+            not frame.extern_flag
+            or frame.data_len < 6
+            or (int(frame.frame_id) & BMS_SEND_TIME_FRAME_MASK)
+            != BMS_SEND_TIME_FRAME_PATTERN
+        ):
+            return None
+
+        address = f"{int(frame.frame_id) & 0xFF:02X}"
+        cluster_index = self.cluster_address_to_index.get(address)
+        if cluster_index is None or not self._is_active_cluster(cluster_index):
+            return None
+
+        parts = (
+            2000 + int(frame.data[0]),
+            int(frame.data[1]),
+            int(frame.data[2]),
+            int(frame.data[3]),
+            int(frame.data[4]),
+            int(frame.data[5]),
+        )
+        try:
+            device_time = datetime(*parts)
+        except ValueError:
+            return None
+
+        values = self.index_monitor_values[cluster_index]
+        for key, value in zip(
+            (
+                "device_time_year",
+                "device_time_month",
+                "device_time_day",
+                "device_time_hour",
+                "device_time_minute",
+                "device_time_second",
+            ),
+            parts,
+        ):
+            values[key] = value
+
+        time_text = device_time.strftime("%Y-%m-%d %H:%M:%S")
+        self._set_device_time_anchor(cluster_index, device_time)
+        return LegacySignalUpdate(
+            cluster_index=cluster_index,
+            signal_id=BMS_SEND_TIME_PF,
+            signal_name="下位机系统时间",
+            value=time_text,
+            unit="",
+            table_index=-1,
+            row_index=-1,
+            source_kind=source_kind,
+        )
+
+    def _update_legacy_log_state(self, cluster_index, definitions, raw_word):
+        if not definitions:
+            return False
+
+        signal_state = self.legacy_signal_state[cluster_index]
+        for definition in definitions:
+            value = decode_legacy_value(
+                raw_word,
+                definition.bit_start,
+                definition.bit_length,
+                definition.signed,
+            )
+            signal_state[definition.name] = str(value)
+        self.legacy_signal_dirty[cluster_index] = True
+        return True
+
     def _decode_balance_response(self, frame):
         cluster_index = self.response_id_to_cluster.get(frame.frame_id)
         if cluster_index is None or frame.data_len < 6:
@@ -629,8 +1236,8 @@ class CanApplicationService:
             return None
 
         module_index, word_index = layout
-        raw_word = frame.data[4] | (frame.data[5] << 8)
         address = self.cluster_index_to_address[cluster_index]
+        raw_word = frame.data[4] | (frame.data[5] << 8)
 
         for bit_index in range(16):
             cell_offset = word_index * 16 + bit_index
@@ -644,6 +1251,68 @@ class CanApplicationService:
 
         return address, signal_id
 
+    def _decode_balance_temperature_frame(self, frame, source_kind):
+        frame_base = int(frame.frame_id) & 0xFFFFFF00
+        if frame_base not in BALANCE_TEMPERATURE_FRAME_BASES:
+            return None
+
+        address = f"{int(frame.frame_id) & 0xFF:02X}"
+        if address not in self.periodic_balance_temperature_values:
+            return None
+        if not self._is_active_address(address):
+            return None
+
+        page_index = ((int(frame.frame_id) >> 16) & 0xFF) - BALANCE_TEMPERATURE_FIRST_PAGE
+        if page_index < 0:
+            return None
+
+        start_index = page_index * BALANCE_TEMPERATURE_VALUES_PER_FRAME
+        max_count = self.balance_module_count * self.balance_temperature_per_module
+        if max_count <= 0 or start_index >= max_count:
+            return None
+
+        value_count = min(
+            BALANCE_TEMPERATURE_VALUES_PER_FRAME,
+            frame.data_len // 2,
+            max_count - start_index,
+        )
+        if value_count <= 0:
+            return None
+
+        updates = []
+        self.log_manager.log_rx(
+            source_kind,
+            frame,
+            [
+                f"addr={address}",
+                "message=balance_temperature",
+                f"count={value_count}",
+            ],
+        )
+        for offset in range(value_count):
+            absolute_index = start_index + offset
+            raw_value = int.from_bytes(
+                frame.data[offset * 2 : offset * 2 + 2],
+                byteorder="little",
+                signed=True,
+            )
+            value = raw_value * 0.1
+            if value.is_integer():
+                value = int(value)
+            self.periodic_balance_temperature_values[address][absolute_index] = value
+            self.periodic_balance_temperature_dirty[address] = True
+            updates.append(
+                PeriodicSignalUpdate(
+                    address=address,
+                    row_key=f"BALANCE_TEMP.{address}.{absolute_index + 1:03d}",
+                    message_name=f"BCU{frame.frame_id:08X}",
+                    signal_name=f"BALANCE_TEMP_ID_{absolute_index + 1:03d}",
+                    value=format_signal_value(value),
+                    unit=BALANCE_TEMPERATURE_UNIT,
+                )
+            )
+        return address, updates
+
     def _cache_periodic_signal(self, address, frame_id, signal_name, value):
         if signal_name.startswith(CELL_VOLTAGE_PREFIX):
             index = int(signal_name[len(CELL_VOLTAGE_PREFIX) :])
@@ -654,6 +1323,12 @@ class CanApplicationService:
             index = int(signal_name[len(CELL_TEMPERATURE_PREFIX) :])
             self.periodic_temperature_values[address][index] = value
             self.periodic_temperature_dirty[address] = True
+            return
+        if signal_name.startswith(BALANCE_TEMPERATURE_PREFIX):
+            index = int(signal_name[len(BALANCE_TEMPERATURE_PREFIX) :]) - 1
+            if index >= 0:
+                self.periodic_balance_temperature_values[address][index] = value
+                self.periodic_balance_temperature_dirty[address] = True
             return
         for prefix in BALANCE_STATE_PREFIXES:
             if signal_name.startswith(prefix):
@@ -675,6 +1350,20 @@ class CanApplicationService:
     def get_periodic_temperature_values(self, address):
         return self._ordered_values(self.periodic_temperature_values[address])
 
+    def get_periodic_balance_temperature_values(self, address):
+        values = self.periodic_balance_temperature_values.get(address)
+        if not values:
+            return []
+        max_count = self.balance_module_count * self.balance_temperature_per_module
+        ordered_values = [
+            values.get(index)
+            for index in range(max_count)
+        ]
+        if not any(value is not None for value in ordered_values):
+            return []
+        return ordered_values
+
+
     def get_periodic_balance_state_values(self, address):
         return self._ordered_named_values(self.periodic_balance_values[address])
 
@@ -694,6 +1383,62 @@ class CanApplicationService:
                     )
                 )
         return items
+
+    def _balance_control_data_id(self, module_index, cell_index):
+        module_index = int(module_index)
+        cell_index = int(cell_index)
+        if module_index < 0 or module_index >= self.balance_module_count:
+            raise RuntimeError(f"Invalid balance module index: {module_index}")
+        if cell_index < 0 or cell_index >= self.balance_cells_per_module:
+            raise RuntimeError(f"Invalid balance cell index: {cell_index}")
+        word_index = cell_index // BALANCE_BITS_PER_WORD
+        if word_index >= self.balance_words_per_module:
+            raise RuntimeError(f"Balance cell index is outside configured word map: {cell_index}")
+        bit_index = cell_index % BALANCE_BITS_PER_WORD
+        data_id = (
+            self.balance_local_signal_ids[word_index]
+            + module_index * self.balance_module_stride
+        )
+        return data_id, word_index, bit_index
+
+    def set_balance_cell_state(
+        self,
+        cluster_index,
+        module_index,
+        cell_index,
+        enabled,
+        timeout_s=1.0,
+    ):
+        if cluster_index not in self.cluster_index_to_address:
+            raise RuntimeError(f"Invalid cluster index: {cluster_index}")
+
+        data_id, word_index, bit_index = self._balance_control_data_id(
+            module_index,
+            cell_index,
+        )
+        address = self.cluster_index_to_address[int(cluster_index)]
+        control_words = self.balance_control_words[address]
+        if data_id in control_words:
+            current_word = control_words[data_id]
+        else:
+            current_word = self.read_data_u16(
+                cluster_index,
+                data_id,
+                timeout_s=timeout_s,
+            )
+        bit_mask = 1 << bit_index
+        if enabled:
+            next_word = int(current_word) | bit_mask
+        else:
+            next_word = int(current_word) & (~bit_mask & 0xFFFF)
+        self.write_data_u16(
+            cluster_index,
+            data_id,
+            next_word,
+            timeout_s=timeout_s,
+        )
+        control_words[data_id] = next_word
+        return next_word
 
     def get_periodic_alarm_state_values(self, address):
         if not self.periodic_alarm_values[address]:
@@ -847,16 +1592,19 @@ class CanApplicationService:
         )
         result = self.driver.send_can(frame)
         self.log_manager.log_tx(frame_kind, cluster_index, frame, result)
+        self._record_tx_activity(cluster_index, result)
         return result
 
     def _drain_queued_rx_frames(self):
         result = PollResult()
         while self.pending_can_frames:
-            frame = self.pending_can_frames.pop(0)
-            self._handle_frame(frame, "rx_can", result)
+            frame = self.pending_can_frames.popleft()
+            handled = self._handle_frame(frame, "rx_can", result)
+            self._record_rx_activity(frame, handled)
         while self.pending_canfd_frames:
-            frame = self.pending_canfd_frames.pop(0)
-            self._handle_frame(frame, "rx_canfd", result)
+            frame = self.pending_canfd_frames.popleft()
+            handled = self._handle_frame(frame, "rx_canfd", result)
+            self._record_rx_activity(frame, handled)
 
     def _receive_can_now(self, max_count=200, timeout_ms=0):
         try:
@@ -871,8 +1619,8 @@ class CanApplicationService:
             return self.driver.receive_canfd(max_count=max_count)
 
     def flush_rx_backlog(self, max_rounds=20, max_count=200):
-        self.pending_can_frames = []
-        self.pending_canfd_frames = []
+        self.pending_can_frames.clear()
+        self.pending_canfd_frames.clear()
         discarded = 0
         for _ in range(max(int(max_rounds), 1)):
             can_frames = self._receive_can_now(max_count=max_count, timeout_ms=0)
@@ -893,38 +1641,46 @@ class CanApplicationService:
         deadline = time.monotonic() + max(float(timeout_s), 0.0)
         while time.monotonic() <= deadline:
             if not self.pending_can_frames and not self.pending_canfd_frames:
-                self.pending_can_frames.extend(self.driver.receive_can(max_count=200))
-                self.pending_canfd_frames.extend(self.driver.receive_canfd(max_count=200))
+                self.pending_can_frames.extend(
+                    self._receive_can_now(max_count=200, timeout_ms=0)
+                )
+                self.pending_canfd_frames.extend(
+                    self._receive_canfd_now(max_count=200, timeout_ms=0)
+                )
             if not self.pending_can_frames and not self.pending_canfd_frames:
                 time.sleep(0.01)
                 continue
 
             if self.pending_can_frames:
-                frame = self.pending_can_frames.pop(0)
+                frame = self.pending_can_frames.popleft()
                 rx_kind = "rx_can"
             else:
-                frame = self.pending_canfd_frames.pop(0)
+                frame = self.pending_canfd_frames.popleft()
                 rx_kind = "rx_canfd"
             if frame.frame_id == expected_frame_id and matcher(frame):
                 self.log_manager.log_rx(rx_kind, frame, [frame_kind])
+                self._record_rx_activity(frame, True)
                 return frame
-            self._handle_frame(frame, rx_kind, PollResult())
+            handled = self._handle_frame(frame, rx_kind, PollResult())
+            self._record_rx_activity(frame, handled)
 
         return None
 
     def _receive_pending_can_frames(self, max_count):
         if self.pending_can_frames:
-            frames = self.pending_can_frames[:max_count]
-            self.pending_can_frames = self.pending_can_frames[max_count:]
-            return frames
-        return self.driver.receive_can(max_count=max_count)
+            return [
+                self.pending_can_frames.popleft()
+                for _ in range(min(max_count, len(self.pending_can_frames)))
+            ]
+        return self._receive_can_now(max_count=max_count, timeout_ms=0)
 
     def _receive_pending_canfd_frames(self, max_count):
         if self.pending_canfd_frames:
-            frames = self.pending_canfd_frames[:max_count]
-            self.pending_canfd_frames = self.pending_canfd_frames[max_count:]
-            return frames
-        return self.driver.receive_canfd(max_count=max_count)
+            return [
+                self.pending_canfd_frames.popleft()
+                for _ in range(min(max_count, len(self.pending_canfd_frames)))
+            ]
+        return self._receive_canfd_now(max_count=max_count, timeout_ms=0)
 
     def _authorize_control_once(self, cluster_index, timeout_s):
         result = self._send_diag_request(
@@ -1038,6 +1794,61 @@ class CanApplicationService:
         return ((int(high_word) & 0xFFFF) << 16) | (int(low_word) & 0xFFFF)
 
     @staticmethod
+    def _parse_device_system_time(values):
+        keys = (
+            "device_time_year",
+            "device_time_month",
+            "device_time_day",
+            "device_time_hour",
+            "device_time_minute",
+            "device_time_second",
+        )
+        parts = [values.get(key) for key in keys]
+        if any(part is None for part in parts):
+            return None
+        try:
+            return datetime(*(int(part) for part in parts))
+        except (TypeError, ValueError):
+            return None
+
+    def _set_device_time_anchor(self, cluster_index, device_time, force=False):
+        cluster_index = int(cluster_index)
+        received_at = time.monotonic()
+        anchor = self.device_time_anchors.get(cluster_index)
+        if anchor is not None and not force:
+            anchor_time, anchor_received_at = anchor
+            elapsed_seconds = max(0, int(received_at - anchor_received_at))
+            running_time = anchor_time + timedelta(seconds=elapsed_seconds)
+            # A delayed indexed response or duplicate broadcast must not rewind
+            # the clock and repeatedly pin the display to an old second.
+            if device_time <= running_time:
+                return False
+
+        self.device_time_anchors[cluster_index] = (device_time, received_at)
+        return True
+
+    def _update_device_time_anchor_from_components(self, cluster_index):
+        values = self.index_monitor_values.get(int(cluster_index), {})
+        device_time = self._parse_device_system_time(values)
+        if device_time is None:
+            return False
+        return self._set_device_time_anchor(cluster_index, device_time)
+
+    def _device_system_time_text(self, cluster_index, values):
+        anchor = self.device_time_anchors.get(int(cluster_index))
+        if anchor is not None:
+            device_time, received_at = anchor
+            elapsed_seconds = max(0, int(time.monotonic() - received_at))
+            return (device_time + timedelta(seconds=elapsed_seconds)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+        device_time = self._parse_device_system_time(values)
+        if device_time is None:
+            return None
+        return device_time.strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
     def _to_input_state(raw_value):
         if raw_value is None:
             return None
@@ -1116,6 +1927,90 @@ class CanApplicationService:
                 raise RuntimeError(f"Read parameter 0x{data_id:05X} was rejected")
             return int.from_bytes(response.data[4:6], byteorder="little", signed=False)
         raise RuntimeError("Read parameter response timed out")
+
+    def read_data_u16_many(
+        self,
+        cluster_index,
+        data_ids,
+        timeout_s=1.0,
+        retries=0,
+        batch_size=4,
+        settle_delay_s=0.0,
+    ):
+        if not self.is_open:
+            raise RuntimeError("CANFD not connected")
+        if cluster_index not in self.cluster_index_to_address:
+            raise RuntimeError(f"Invalid cluster index: {cluster_index}")
+
+        ordered_ids = list(dict.fromkeys(int(data_id) for data_id in data_ids))
+        if not ordered_ids:
+            return {}
+
+        expected_response_id = self._build_response_frame_id(RESP_READ_VAR, cluster_index)
+        attempt_count = max(int(retries), 0) + 1
+        batch_size = max(int(batch_size), 1)
+        values = {}
+
+        for batch_start in range(0, len(ordered_ids), batch_size):
+            batch_ids = ordered_ids[batch_start : batch_start + batch_size]
+            pending_ids = set(batch_ids)
+
+            for attempt_index in range(attempt_count):
+                for data_id in tuple(pending_ids):
+                    payload = data_id.to_bytes(4, byteorder="little", signed=False)
+                    result = self._send_diag_request(
+                        "read_var_batch",
+                        cluster_index,
+                        CMD_READ_VAR,
+                        payload,
+                    )
+                    if result <= 0:
+                        raise RuntimeError("Read variable batch request send failed")
+
+                deadline = time.monotonic() + max(float(timeout_s), 0.0)
+                while pending_ids:
+                    remaining_s = max(deadline - time.monotonic(), 0.0)
+                    response = self._wait_for_can_frame(
+                        expected_response_id,
+                        lambda frame: (
+                            frame.data_len >= 7
+                            and int.from_bytes(
+                                frame.data[:4], byteorder="little", signed=False
+                            )
+                            in pending_ids
+                        ),
+                        remaining_s,
+                        "read_var_batch_response",
+                    )
+                    if response is None:
+                        break
+                    data_id = int.from_bytes(
+                        response.data[:4], byteorder="little", signed=False
+                    )
+                    if not response.data[6]:
+                        raise RuntimeError(f"Read parameter 0x{data_id:05X} was rejected")
+                    values[data_id] = int.from_bytes(
+                        response.data[4:6], byteorder="little", signed=False
+                    )
+                    pending_ids.discard(data_id)
+
+                if not pending_ids:
+                    break
+                if attempt_index + 1 < attempt_count:
+                    is_downstream = self._is_downstream_cluster(cluster_index)
+                    self._prepare_diag_exchange(
+                        cluster_index,
+                        aggressive=is_downstream,
+                    )
+                    time.sleep(0.02 if is_downstream else 0.01)
+
+            if pending_ids:
+                missing = ", ".join(f"0x{data_id:05X}" for data_id in sorted(pending_ids))
+                raise RuntimeError(f"Read parameter batch response timed out: {missing}")
+            if settle_delay_s > 0 and batch_start + batch_size < len(ordered_ids):
+                time.sleep(float(settle_delay_s))
+
+        return values
 
     def write_data_u16(self, cluster_index, data_id, value, timeout_s=1.0):
         if not self.is_open:
@@ -1210,18 +2105,39 @@ class CanApplicationService:
 
     def read_alarm_parameter_summary(self, cluster_index, timeout_s=1.0):
         self._prepare_diag_exchange(cluster_index, aggressive=False)
+        effective_timeout_s, retries, settle_delay_s = self._alarm_parameter_read_profile(
+            cluster_index,
+            timeout_s,
+            full_record=False,
+        )
+        batch_size = (
+            ALARM_PARAMETER_REMOTE_BATCH_SIZE
+            if self._is_downstream_cluster(cluster_index)
+            else ALARM_PARAMETER_LOCAL_BATCH_SIZE
+        )
+        data_ids = [
+            self._alarm_parameter_data_id(definition.alarm_id, field.index)
+            for definition in self.alarm_parameter_definitions
+            for field in (
+                ALARM_PARAMETER_FIELDS_BY_KEY[key]
+                for key in ALARM_PARAMETER_SUMMARY_KEYS
+            )
+        ]
+        raw_values = self.read_data_u16_many(
+            cluster_index,
+            data_ids,
+            timeout_s=effective_timeout_s,
+            retries=retries,
+            batch_size=batch_size,
+            settle_delay_s=settle_delay_s,
+        )
         records = []
         for definition in self.alarm_parameter_definitions:
             values = {}
             for key in ALARM_PARAMETER_SUMMARY_KEYS:
                 field = ALARM_PARAMETER_FIELDS_BY_KEY[key]
-                raw_value = self._read_alarm_parameter_field_value(
-                    cluster_index,
-                    definition.alarm_id,
-                    field,
-                    timeout_s,
-                    full_record=False,
-                )
+                data_id = self._alarm_parameter_data_id(definition.alarm_id, field.index)
+                raw_value = raw_values[data_id]
                 values[key] = self._decode_alarm_parameter_value(field, raw_value)
             records.append(
                 AlarmParameterRecord(
@@ -1707,6 +2623,7 @@ class CanApplicationService:
             raise RuntimeError("Set system time response timed out")
         if not response.data[6]:
             raise RuntimeError("Set system time was rejected")
+        self._set_device_time_anchor(cluster_index, current_time, force=True)
         return True
 
     def send_next_monitor_query(self, cluster_index):
@@ -1731,7 +2648,43 @@ class CanApplicationService:
         ) % len(self.index_monitor_signal_ids)
         return result
 
-    def get_index_monitor_snapshot(self, cluster_index):
+    def send_signal_query(self, cluster_index, data_id):
+        if not self.is_open:
+            return 0
+        if cluster_index not in self.cluster_index_to_address:
+            return 0
+        payload = int(data_id).to_bytes(4, byteorder="little", signed=False)
+        return self._send_diag_request(
+            "active_page_query",
+            cluster_index,
+            CMD_READ_VAR,
+            payload,
+        )
+
+    def send_next_power_diagnostic_query(self, cluster_index):
+        if not self.is_open:
+            return 0
+        if cluster_index not in self.cluster_index_to_address:
+            return 0
+        if not self.power_diagnostic_poll_sequence:
+            return 0
+        cursor = self.power_diagnostic_query_cursors[cluster_index]
+        data_id = self.power_diagnostic_poll_sequence[cursor]
+        result = self.send_signal_query(cluster_index, data_id)
+        self.power_diagnostic_query_cursors[cluster_index] = (
+            cursor + 1
+        ) % len(self.power_diagnostic_poll_sequence)
+        return result
+
+    def reset_power_diagnostic_query(self, cluster_index):
+        if cluster_index in self.power_diagnostic_query_cursors:
+            self.power_diagnostic_query_cursors[cluster_index] = 0
+
+    def get_power_diagnostic_snapshot(self, cluster_index):
+        return dict(self.power_diagnostic_raw_values.get(int(cluster_index), {}))
+
+    def _get_legacy_index_monitor_snapshot(self, cluster_index):
+        """Return the historical name-based snapshot during protocol migration."""
         legacy = self.legacy_request_raw_values.get(cluster_index, {})
         extra = self.index_monitor_values.get(cluster_index, {})
         return {
@@ -1775,8 +2728,8 @@ class CanApplicationService:
             "min_cell_temp_index": legacy.get("最小单体温度模组内位置"),
             "remaining_discharge_kwh": legacy.get("剩余可放电[0.01KWH]"),
             "remaining_charge_kwh": legacy.get("剩余可充电[0.01KWH]"),
-            "single_charge_kwh": legacy.get("单次充电电量[0.01KWH]"),
-            "single_discharge_kwh": legacy.get("单次放电电量[0.01KWH]"),
+            "single_charge_kwh": legacy.get("单次充电电量[0.1KWH]"),
+            "single_discharge_kwh": legacy.get("单次放电电量[0.1KWH]"),
             "total_charge_kwh": self._combine_words(
                 legacy.get("累计充电电量高字节[0.01KWH]"),
                 legacy.get("累计充电电量低字节[0.01KWH]"),
@@ -1811,6 +2764,7 @@ class CanApplicationService:
     def get_index_monitor_snapshot(self, cluster_index):
         extra = self.index_monitor_values.get(cluster_index, {})
         return {
+            "device_time": self._device_system_time_text(cluster_index, extra),
             "work_mode": extra.get("work_mode"),
             "run_status": self._raw_word_value(cluster_index, VAR_SYS_RUN_STATUS),
             "system_current": self._raw_word_value(cluster_index, 0x0E, signed=True),
@@ -1861,10 +2815,18 @@ class CanApplicationService:
                 self._raw_word_value(cluster_index, 0x90888),
                 self._raw_word_value(cluster_index, 0x90887),
             ),
-            "continuous_discharge_power": self._raw_word_value(cluster_index, 0x1AE),
-            "continuous_charge_power": self._raw_word_value(cluster_index, 0x1AF),
-            "continuous_discharge_current": self._raw_word_value(cluster_index, 0x1AD),
-            "continuous_charge_current": self._raw_word_value(cluster_index, 0x1B0),
+            "continuous_discharge_power": self._raw_word_value(
+                cluster_index, VAR_SYS_ALLOW_DSCH_60S_POWER
+            ),
+            "continuous_charge_power": self._raw_word_value(
+                cluster_index, VAR_SYS_ALLOW_CHRG_60S_POWER
+            ),
+            "continuous_discharge_current": self._raw_word_value(
+                cluster_index, VAR_SYS_ALLOW_DSCH_60S_CURR
+            ),
+            "continuous_charge_current": self._raw_word_value(
+                cluster_index, VAR_SYS_ALLOW_CHRG_60S_CURR
+            ),
             "user_set_soc": extra.get("user_set_soc"),
             "hvil_pwm_freq": extra.get("hvil_pwm_freq"),
             "hvil_pwm_duty": extra.get("hvil_pwm_duty"),
@@ -1889,26 +2851,20 @@ class CanApplicationService:
             return 0
         if active_tab_index not in self.cluster_index_to_address:
             return 0
+        if not self.request_query_signal_ids:
+            return 0
 
-        definition = self.legacy_catalog.definitions[self.query_cursors[active_tab_index]]
-        payload = definition.signal_id.to_bytes(4, byteorder="little", signed=False) + b"\x00\x00\x00\x00"
-        if active_tab_index == 0:
-            frame_id = 0x188000F2
-        else:
-            frame_id = 0x1880A0F2 + ((active_tab_index - 1) << 8)
-
-        frame = RawFrame(
-            frame_id=frame_id,
-            data=payload,
-            is_fd=False,
-            extern_flag=True,
-            remote_flag=False,
+        signal_id = self.request_query_signal_ids[self.query_cursors[active_tab_index]]
+        payload = signal_id.to_bytes(4, byteorder="little", signed=False) + b"\x00\x00\x00\x00"
+        result = self._send_diag_request(
+            "query",
+            active_tab_index,
+            CMD_READ_VAR,
+            payload,
         )
-        result = self.driver.send_can(frame)
-        self.log_manager.log_tx("query", active_tab_index, frame, result)
         self.query_cursors[active_tab_index] = (
             self.query_cursors[active_tab_index] + 1
-        ) % len(self.legacy_catalog.definitions)
+        ) % len(self.request_query_signal_ids)
         return result
 
     def send_next_balance_query(self, active_tab_index):
@@ -1922,20 +2878,12 @@ class CanApplicationService:
         cursor = self.balance_query_cursors[active_tab_index]
         signal_id = self.balance_request_signal_ids[cursor]
         payload = signal_id.to_bytes(4, byteorder="little", signed=False) + b"\x00\x00\x00\x00"
-        if active_tab_index == 0:
-            frame_id = 0x188000F2
-        else:
-            frame_id = 0x1880A0F2 + ((active_tab_index - 1) << 8)
-
-        frame = RawFrame(
-            frame_id=frame_id,
-            data=payload,
-            is_fd=False,
-            extern_flag=True,
-            remote_flag=False,
+        result = self._send_diag_request(
+            "balance_query",
+            active_tab_index,
+            CMD_READ_VAR,
+            payload,
         )
-        result = self.driver.send_can(frame)
-        self.log_manager.log_tx("balance_query", active_tab_index, frame, result)
         self.balance_query_cursors[active_tab_index] = (
             cursor + 1
         ) % len(self.balance_request_signal_ids)
@@ -1994,8 +2942,6 @@ class CanApplicationService:
         for current_cluster_index in target_clusters:
             if current_cluster_index not in self.cluster_index_to_address:
                 continue
-            if not self.legacy_signal_dirty[current_cluster_index]:
-                continue
             self.log_manager.write_cluster_snapshot(
                 current_cluster_index,
                 self.legacy_signal_state[current_cluster_index],
@@ -2034,6 +2980,21 @@ class CanApplicationService:
                 )
                 self.legacy_balance_dirty[address] = False
 
+            balance_temperature_values = self.get_periodic_balance_temperature_values(address)
+            if (
+                self.periodic_balance_temperature_dirty[address]
+                and balance_temperature_values
+            ):
+                self.log_manager.write_balance_temperature_snapshot(
+                    address,
+                    balance_temperature_values,
+                )
+                self.periodic_balance_temperature_dirty[address] = False
+
+        flush_logger = getattr(self.log_manager, "flush", None)
+        if callable(flush_logger):
+            flush_logger()
+
     def set_snapshot_logging_enabled(self, enabled):
         enabled = bool(enabled)
         self.snapshot_logging_enabled = enabled
@@ -2056,6 +3017,10 @@ class CanApplicationService:
     def _clear_periodic_decode_caches(self):
         self.periodic_voltage_values = {address: {} for address in self.cluster_addresses}
         self.periodic_temperature_values = {address: {} for address in self.cluster_addresses}
+        self.periodic_balance_temperature_values = {
+            address: {}
+            for address in self.cluster_addresses
+        }
         self.periodic_balance_values = {address: {} for address in self.cluster_addresses}
         self.periodic_alarm_values = {address: {} for address in self.cluster_addresses}
         self.periodic_terminal_temperature_values = {
@@ -2070,10 +3035,17 @@ class CanApplicationService:
             address: False
             for address in self.cluster_addresses
         }
+        self.periodic_balance_temperature_dirty = {
+            address: False
+            for address in self.cluster_addresses
+        }
 
     def _reset_runtime_state(self):
         self.legacy_signal_state = {
-            cluster_index: self.legacy_catalog.create_cluster_log_state()
+            cluster_index: {
+                signal_name: "0"
+                for signal_name in self.snapshot_log_signal_names
+            }
             for cluster_index in self.cluster_indices
         }
         self.legacy_request_raw_values = {
@@ -2084,12 +3056,61 @@ class CanApplicationService:
             cluster_index: {}
             for cluster_index in self.cluster_indices
         }
+
         self.index_monitor_values = {
             cluster_index: {}
             for cluster_index in self.cluster_indices
         }
-        self.pending_can_frames = []
-        self.pending_canfd_frames = []
+        self.device_time_anchors = {
+            cluster_index: None
+            for cluster_index in self.cluster_indices
+        }
+        self.power_diagnostic_raw_values = {
+            cluster_index: {}
+            for cluster_index in self.cluster_indices
+        }
+        self.pending_can_frames = deque()
+        self.pending_canfd_frames = deque()
+        self.tx_attempt_count = 0
+        self.tx_frame_count = 0
+        self.tx_failure_count = 0
+        self.rx_frame_count = 0
+        self.rx_handled_frame_count = 0
+        self.last_tx_monotonic = None
+        self.last_rx_monotonic = None
+        self.last_tx_time_text = ""
+        self.last_rx_time_text = ""
+        self.last_rx_frame_id = None
+        self.tx_attempt_count_by_cluster = {
+            cluster_index: 0 for cluster_index in self.cluster_indices
+        }
+        self.tx_frame_count_by_cluster = {
+            cluster_index: 0 for cluster_index in self.cluster_indices
+        }
+        self.tx_failure_count_by_cluster = {
+            cluster_index: 0 for cluster_index in self.cluster_indices
+        }
+        self.rx_frame_count_by_cluster = {
+            cluster_index: 0 for cluster_index in self.cluster_indices
+        }
+        self.rx_handled_frame_count_by_cluster = {
+            cluster_index: 0 for cluster_index in self.cluster_indices
+        }
+        self.last_tx_monotonic_by_cluster = {
+            cluster_index: None for cluster_index in self.cluster_indices
+        }
+        self.last_rx_monotonic_by_cluster = {
+            cluster_index: None for cluster_index in self.cluster_indices
+        }
+        self.last_tx_time_text_by_cluster = {
+            cluster_index: "" for cluster_index in self.cluster_indices
+        }
+        self.last_rx_time_text_by_cluster = {
+            cluster_index: "" for cluster_index in self.cluster_indices
+        }
+        self.last_rx_frame_id_by_cluster = {
+            cluster_index: None for cluster_index in self.cluster_indices
+        }
         self.legacy_signal_dirty = {
             cluster_index: True
             for cluster_index in self.cluster_indices
@@ -2103,6 +3124,10 @@ class CanApplicationService:
             address: False
             for address in self.cluster_addresses
         }
+        self.balance_control_words = {
+            address: {}
+            for address in self.cluster_addresses
+        }
         self.balance_query_cursors = {
             cluster_index: 0
             for cluster_index in self.cluster_indices
@@ -2112,6 +3137,10 @@ class CanApplicationService:
             for cluster_index in self.cluster_indices
         }
         self.monitor_query_cursors = {
+            cluster_index: 0
+            for cluster_index in self.cluster_indices
+        }
+        self.power_diagnostic_query_cursors = {
             cluster_index: 0
             for cluster_index in self.cluster_indices
         }

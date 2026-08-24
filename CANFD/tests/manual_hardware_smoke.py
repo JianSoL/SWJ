@@ -8,7 +8,11 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from application.can_service import CanApplicationService
-from application.config_loader import load_runtime_config
+from application.config_loader import (
+    load_runtime_config,
+    resolve_active_cluster_addresses,
+)
+from application.runtime import build_runtime_paths
 from application.session_logger import SessionLogManager
 from domain.dbc_runtime import DbcRuntime
 from domain.legacy_catalog import LegacySignalCatalog
@@ -17,7 +21,11 @@ from infrastructure.cxcanfd_driver import CxCanFdDriver, VCI_USBCAN2
 
 
 def build_service():
-    runtime_config = load_runtime_config(PROJECT_DIR / "conf.yaml")
+    runtime_paths = build_runtime_paths()
+    runtime_config = load_runtime_config(
+        runtime_paths.config_path,
+        profile=runtime_paths.profile,
+    )
     bus_config = BusConfig(
         can_type=VCI_USBCAN2,
         device_index=int(runtime_config.get("DEVICE_INDEX", 0)),
@@ -28,24 +36,28 @@ def build_service():
         mode=0,
         receive_timeout_ms=0,
     )
-    legacy_catalog = LegacySignalCatalog.from_excel(PROJECT_DIR / "SINGLE" / "BCU.xlsx")
-    dbc_runtime = DbcRuntime(PROJECT_DIR.parent / "DCFDV1.3.dbc")
+    legacy_catalog = LegacySignalCatalog.from_yaml(runtime_paths.legacy_catalog_path)
+    dbc_runtime = DbcRuntime(runtime_paths.dbc_path)
     balance_module_count = int(
         runtime_config.get(
             "BALANCE_MODULE_COUNT",
             runtime_config.get("LECU_NUM", 4),
         )
     )
+    active_cluster_addresses = resolve_active_cluster_addresses(runtime_config)
     log_manager = SessionLogManager(
-        log_dir=PROJECT_DIR / "log",
-        cluster_indices=range(0, runtime_config["BCU_NUM"] + 1),
-        cluster_addresses=runtime_config["ADDRESLIST"][: runtime_config["BCU_NUM"] + 1],
+        log_dir=runtime_paths.log_dir,
+        cluster_indices=range(len(active_cluster_addresses)),
+        cluster_addresses=active_cluster_addresses,
         legacy_signal_names=legacy_catalog.logged_signal_names,
         voltage_count=int(runtime_config.get("CELL_NUM", 0)),
         temperature_count=int(runtime_config.get("CELL_Tem_NUM", 0)),
         balance_module_count=balance_module_count,
         balance_cells_per_module=int(
             runtime_config.get("BALANCE_CELLS_PER_MODULE", runtime_config.get("CELL_NUM", 0))
+        ),
+        balance_temperature_per_module=int(
+            runtime_config.get("BALANCE_TEMP_PER_MODULE", 8)
         ),
     )
     driver = CxCanFdDriver()

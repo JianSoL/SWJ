@@ -1,17 +1,21 @@
 import math
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+
+from presentation.cluster_display import format_cluster_context
 
 
 RUN_STATUS_TEXT = {
@@ -68,7 +72,11 @@ class StateDot(QFrame):
         self._label_text = str(label_text)
         self.setObjectName("stateBadge")
         self.setMinimumHeight(34)
-        self.setMinimumWidth(118)
+        self.setMinimumWidth(82)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
         self.setToolTip(self._label_text)
 
         layout = QHBoxLayout(self)
@@ -131,6 +139,9 @@ class StateDot(QFrame):
 
 
 class IndexMonitorPage(QWidget):
+    TWO_COLUMN_MIN_WIDTH = 1080
+    THREE_COLUMN_MIN_WIDTH = 1740
+
     def __init__(self):
         super().__init__()
         self.current_cluster_index = None
@@ -140,6 +151,7 @@ class IndexMonitorPage(QWidget):
         self.input_dots = []
         self.output_dots = []
         self.rt_fields = []
+        self.responsive_layout_mode = None
         self._build_ui()
 
     def _build_ui(self):
@@ -163,22 +175,87 @@ class IndexMonitorPage(QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        top_layout = QGridLayout()
-        top_layout.setHorizontalSpacing(12)
-        top_layout.setVerticalSpacing(12)
-        top_layout.setColumnStretch(0, 1)
-        top_layout.setColumnStretch(1, 1)
-        top_layout.setColumnStretch(2, 1)
-        top_layout.setRowStretch(0, 0)
-        top_layout.setRowStretch(1, 0)
-        layout.addLayout(top_layout, stretch=1)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setObjectName("indexMonitorScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.scroll_area.viewport().installEventFilter(self)
 
-        top_layout.addWidget(self._build_system_group(), 0, 0)
-        top_layout.addWidget(self._build_state_group(), 0, 1)
-        top_layout.addWidget(self._build_soc_group(), 0, 2)
-        top_layout.addWidget(self._build_extrema_group(), 1, 0)
-        top_layout.addWidget(self._build_statistics_group(), 1, 1)
-        top_layout.addWidget(self._build_temperature_group(), 1, 2)
+        self.monitor_content = QWidget(self.scroll_area)
+        self.monitor_content.setObjectName("indexMonitorContent")
+        self.monitor_grid = QGridLayout(self.monitor_content)
+        self.monitor_grid.setContentsMargins(0, 0, 2, 2)
+        self.monitor_grid.setHorizontalSpacing(12)
+        self.monitor_grid.setVerticalSpacing(12)
+        self.monitor_grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.monitor_grid.setSizeConstraint(
+            QLayout.SizeConstraint.SetMinimumSize
+        )
+
+        self.system_group = self._build_system_group()
+        self.state_group = self._build_state_group()
+        self.soc_group = self._build_soc_group()
+        self.extrema_group = self._build_extrema_group()
+        self.statistics_group = self._build_statistics_group()
+        self.temperature_group = self._build_temperature_group()
+        self.monitor_groups = (
+            self.system_group,
+            self.state_group,
+            self.soc_group,
+            self.extrema_group,
+            self.statistics_group,
+            self.temperature_group,
+        )
+
+        self.scroll_area.setWidget(self.monitor_content)
+        layout.addWidget(self.scroll_area, stretch=1)
+        self._apply_responsive_layout(self.width())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        available_width = self.scroll_area.viewport().width()
+        self._apply_responsive_layout(available_width)
+
+    def eventFilter(self, watched, event):
+        if (
+            watched is self.scroll_area.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._apply_responsive_layout(event.size().width())
+        return super().eventFilter(watched, event)
+
+    def _apply_responsive_layout(self, available_width):
+        available_width = max(int(available_width), 0)
+        if available_width >= self.THREE_COLUMN_MIN_WIDTH:
+            mode = "wide"
+            column_count = 3
+        elif available_width >= self.TWO_COLUMN_MIN_WIDTH:
+            mode = "medium"
+            column_count = 2
+        else:
+            mode = "narrow"
+            column_count = 1
+        if mode == self.responsive_layout_mode:
+            return
+
+        for group in self.monitor_groups:
+            self.monitor_grid.removeWidget(group)
+        for index, group in enumerate(self.monitor_groups):
+            row_index, column_index = divmod(index, column_count)
+            self.monitor_grid.addWidget(group, row_index, column_index)
+        for column_index in range(3):
+            self.monitor_grid.setColumnStretch(
+                column_index,
+                1 if column_index < column_count else 0,
+            )
+        self.responsive_layout_mode = mode
+        self.monitor_content.updateGeometry()
 
     def _create_metric_label(self, text, parent, width=110):
         label = QLabel(str(text), parent)
@@ -225,6 +302,7 @@ class IndexMonitorPage(QWidget):
         layout.setVerticalSpacing(8)
 
         fields = (
+            ("device_time", "\u4e0b\u4f4d\u673a\u7cfb\u7edf\u65f6\u95f4"),
             ("work_mode", "\u5de5\u88c5\u6a21\u5f0f"),
             ("run_status", "\u8fd0\u884c\u72b6\u6001"),
             ("system_current", "\u7efc\u5408\u7535\u6d41"),
@@ -252,6 +330,7 @@ class IndexMonitorPage(QWidget):
             label_width=110,
             value_width=120,
         )
+        self.value_fields["device_time"].setMinimumWidth(175)
         return group
 
     def _build_state_group(self):
@@ -261,28 +340,40 @@ class IndexMonitorPage(QWidget):
 
         di_box = QGroupBox("DI\u8f93\u5165\u72b6\u6001", group)
         di_layout = QGridLayout(di_box)
+        self.input_state_layout = di_layout
         di_layout.setHorizontalSpacing(12)
         di_layout.setVerticalSpacing(8)
         di_layout.setContentsMargins(10, 10, 10, 10)
+        input_column_count = 4
         for index in range(12):
             dot = StateDot(f"DI{index + 1}")
             self.input_dots.append(dot)
-            di_layout.addWidget(dot, index // 6, index % 6)
-        for column in range(6):
+            di_layout.addWidget(
+                dot,
+                index // input_column_count,
+                index % input_column_count,
+            )
+        for column in range(input_column_count):
             di_layout.setColumnStretch(column, 1)
         layout.addWidget(di_box)
 
         output_box = QGroupBox("\u8f93\u51fa\u72b6\u6001", group)
         output_layout = QGridLayout(output_box)
+        self.output_state_layout = output_layout
         output_layout.setHorizontalSpacing(12)
         output_layout.setVerticalSpacing(8)
         output_layout.setContentsMargins(10, 10, 10, 10)
         names = [f"HSD{index}" for index in range(1, 9)] + ["LSD1", "LSD2"]
+        output_column_count = 4
         for index, name in enumerate(names):
             dot = StateDot(name)
             self.output_dots.append(dot)
-            output_layout.addWidget(dot, index // 5, index % 5)
-        for column in range(5):
+            output_layout.addWidget(
+                dot,
+                index // output_column_count,
+                index % output_column_count,
+            )
+        for column in range(output_column_count):
             output_layout.setColumnStretch(column, 1)
         layout.addWidget(output_box)
         layout.addStretch(1)
@@ -372,10 +463,10 @@ class IndexMonitorPage(QWidget):
             ("single_discharge_kwh", "\u5355\u6b21\u653e\u7535\u7535\u91cf"),
             ("total_charge_kwh", "\u7d2f\u8ba1\u5145\u7535\u7535\u91cf"),
             ("total_discharge_kwh", "\u7d2f\u8ba1\u653e\u7535\u7535\u91cf"),
-            ("continuous_discharge_power", "\u6700\u5927\u653e\u7535\u529f\u7387"),
-            ("continuous_charge_power", "\u6700\u5927\u5145\u7535\u529f\u7387"),
-            ("continuous_discharge_current", "\u6700\u5927\u653e\u7535\u7535\u6d41"),
-            ("continuous_charge_current", "\u6700\u5927\u5145\u7535\u7535\u6d41"),
+            ("continuous_discharge_power", "60S\u6700\u5927\u653e\u7535\u529f\u7387"),
+            ("continuous_charge_power", "60S\u6700\u5927\u5145\u7535\u529f\u7387"),
+            ("continuous_discharge_current", "60S\u6700\u5927\u653e\u7535\u7535\u6d41"),
+            ("continuous_charge_current", "60S\u6700\u5927\u5145\u7535\u7535\u6d41"),
             ("hvil_pwm_freq", "HVIL\u9891\u7387"),
             ("hvil_pwm_duty", "HVIL\u5360\u7a7a\u6bd4"),
         )
@@ -419,9 +510,7 @@ class IndexMonitorPage(QWidget):
         if cluster_index is None or not address:
             self.cluster_label.setText("\u5f53\u524d\u7c07: -")
             return
-        self.cluster_label.setText(
-            f"\u5f53\u524d\u7c07: \u7c07{cluster_index} / \u5730\u5740 {address}"
-        )
+        self.cluster_label.setText(format_cluster_context(cluster_index, address))
 
     def set_status_text(self, text):
         self.status_label.setText("" if text is None else str(text))
@@ -435,6 +524,14 @@ class IndexMonitorPage(QWidget):
         for dot in self.input_dots + self.output_dots:
             dot.set_active(None)
 
+    def update_device_time(self, device_time):
+        device_time_text = "--" if not device_time else str(device_time)
+        widget = self.value_fields["device_time"]
+        if widget.text() != device_time_text:
+            widget.setText(device_time_text)
+        if widget.toolTip() != device_time_text:
+            widget.setToolTip(device_time_text)
+
     def update_snapshot(self, snapshot):
         if not snapshot:
             self.clear_values()
@@ -442,6 +539,7 @@ class IndexMonitorPage(QWidget):
 
         work_mode = snapshot.get("work_mode")
         run_status = snapshot.get("run_status")
+        self.update_device_time(snapshot.get("device_time"))
         self.value_fields["work_mode"].setText(
             "--"
             if work_mode is None
@@ -558,10 +656,10 @@ class IndexMonitorPage(QWidget):
             _format_scaled(snapshot.get("remaining_charge_kwh"), 100, 2, " kWh")
         )
         self.value_fields["single_charge_kwh"].setText(
-            _format_scaled(snapshot.get("single_charge_kwh"), 100, 2, " kWh")
+            _format_scaled(snapshot.get("single_charge_kwh"), 10, 1, " kWh")
         )
         self.value_fields["single_discharge_kwh"].setText(
-            _format_scaled(snapshot.get("single_discharge_kwh"), 100, 2, " kWh")
+            _format_scaled(snapshot.get("single_discharge_kwh"), 10, 1, " kWh")
         )
         self.value_fields["total_charge_kwh"].setText(
             _format_scaled(snapshot.get("total_charge_kwh"), 100, 2, " kWh")
@@ -570,10 +668,10 @@ class IndexMonitorPage(QWidget):
             _format_scaled(snapshot.get("total_discharge_kwh"), 100, 2, " kWh")
         )
         self.value_fields["continuous_discharge_power"].setText(
-            _format_int(snapshot.get("continuous_discharge_power"), " W")
+            _format_scaled(snapshot.get("continuous_discharge_power"), 0.1, 0, " W")
         )
         self.value_fields["continuous_charge_power"].setText(
-            _format_int(snapshot.get("continuous_charge_power"), " W")
+            _format_scaled(snapshot.get("continuous_charge_power"), 0.1, 0, " W")
         )
         self.value_fields["continuous_discharge_current"].setText(
             _format_scaled(snapshot.get("continuous_discharge_current"), 10, 1, " A")
